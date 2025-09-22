@@ -1,79 +1,100 @@
 import os
+import uuid
+from dotenv import load_dotenv
 from flask import Flask, request, send_from_directory
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import Bot, Update
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Variables de entorno
+# Cargar variables de entorno
+load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-BASE_URL = os.getenv("BASE_URL")  # Ej: https://File2Link.onrender.com
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-FILES_DIR = "files"
 
-# Crear carpeta de archivos si no existe
-os.makedirs(FILES_DIR, exist_ok=True)
-
-# Flask para servir archivos y recibir webhooks
 app = Flask(__name__)
+bot = Bot(BOT_TOKEN)
+dispatcher = Dispatcher(bot, None, use_context=True)
 
-# Inicializar bot
-application = Application.builder().token(BOT_TOKEN).build()
+# Diccionario para almacenar temporalmente los archivos y sus IDs únicos
+files_cache = {}
 
-# Comando /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Envíame un archivo y te daré un enlace directo desde este servidor.")
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja el comando /start."""
+    await update.message.reply_text("¡Hola! Envíame un archivo para obtener un enlace de descarga temporal.")
 
-# Manejo de archivos
-async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file_obj = None
-    filename = None
-
-    if update.message.document:
-        file_obj = update.message.document
-        filename = file_obj.file_name
-    elif update.message.photo:
-        file_obj = update.message.photo[-1]
-        filename = f"photo_{file_obj.file_unique_id}.jpg"
-    elif update.message.video:
-        file_obj = update.message.video
-        filename = file_obj.file_name or f"video_{file_obj.file_unique_id}.mp4"
-    elif update.message.audio:
-        file_obj = update.message.audio
-        filename = file_obj.file_name
+async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja el reenvío de cualquier archivo multimedia."""
+    message = update.message
+    file_id = None
+    file_name = "file"
+    
+    if message.photo:
+        file_id = message.photo[-1].file_id
+        file_name = "photo.jpg"
+    elif message.video:
+        file_id = message.video.file_id
+        if message.video.file_name:
+            file_name = message.video.file_name
+    elif message.document:
+        file_id = message.document.file_id
+        if message.document.file_name:
+            file_name = message.document.file_name
     else:
-        await update.message.reply_text("Formato no soportado.")
+        await message.reply_text("Lo siento, solo puedo procesar fotos, videos o documentos.")
         return
 
-    # Descargar archivo a carpeta local
-    file = await context.bot.get_file(file_obj.file_id)
-    file_path = os.path.join(FILES_DIR, filename)
-    await file.download_to_drive(file_path)
+    status_message = await message.reply_text("Procesando tu archivo... por favor espera. ⏳")
 
-    # Generar enlace directo
-    direct_link = f"{BASE_URL}/files/{filename}"
-    await update.message.reply_text(f"📎 Enlace directo:\n{direct_link}")
+    try:
+        telegram_file = await bot.get_file(file_id)
+        # Crear una ruta de archivo única en el directorio temporal
+        unique_id = str(uuid.uuid4())
+        temp_dir = "/tmp"
+        temp_file_path = os.path.join(temp_dir, f"{unique_id}-{file_name}")
 
-# Registrar handlers
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, file_handler))
+        await telegram_file.download_to_drive(temp_file_path)
 
-# Endpoint para recibir actualizaciones de Telegram
-@app.route(WEBHOOK_PATH, methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    application.update_queue.put_nowait(update)
-    return "OK", 200
+        # Almacenar la ruta del archivo en el caché
+        files_cache[unique_id] = temp_file_path
+        
+        # Generar el enlace de descarga con el ID único
+        # Reemplaza 'YOUR_RENDER_URL' con tu URL de Render
+        download_link = f"https://YOUR_RENDER_URL.onrender.com/files/{unique_id}"
 
-# Servir archivos desde /files
-@app.route("/files/<path:filename>", methods=["GET"])
-def serve_file(filename):
-    return send_from_directory(FILES_DIR, filename)
+        await status_message.edit_text(
+            f"✅ ¡Tu enlace de descarga temporal está listo!\n\n🔗 **Enlace:** {download_link}\n\n⚠️ **Nota:** Este enlace solo funcionará hasta que el servicio de Render se reinicie."
+        )
 
-# Endpoint raíz opcional
-@app.route("/", methods=["GET"])
-def index():
-    return "Bot activo y sirviendo archivos", 200
+    except Exception as e:
+        await status_message.edit_text(f"❌ Ocurrió un error inesperado: {e}")
+
+# Manejador para servir los archivos temporales
+@app.route("/files/<unique_id>")
+def serve_file(unique_id):
+    if unique_id in files_cache:
+        file_path = files_cache[unique_id]
+        if os.path.exists(file_path):
+            directory, filename = os.path.split(file_path)
+            # send_from_directory gestiona la descarga de forma segura
+            return send_from_directory(directory, filename, as_attachment=True)
+    return "Archivo no encontrado o el enlace ha expirado.", 404
+
+# Configuración del webhook (idéntica a ejemplos anteriores)
+@app.route("/webhook", methods=["POST"])
+def webhook_handler():
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), bot)
+        dispatcher.process_update(update)
+    return "ok"
+
+@app.route("/")
+def set_webhook():
+    webhook_url = f"https://YOUR_RENDER_URL.onrender.com/webhook"
+    s = bot.set_webhook(url=webhook_url)
+    if s:
+        return "Webhook configurado correctamente."
+    else:
+        return "Fallo al configurar el webhook."
 
 if __name__ == "__main__":
-    # Configurar webhook en arranque
-    application.bot.set_webhook(url=f"{BASE_URL}{WEBHOOK_PATH}")
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    dispatcher.add_handler(CommandHandler("start", start_command))
+    dispatcher.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_media))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
