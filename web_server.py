@@ -7,15 +7,16 @@ app = Flask(__name__)
 
 @app.route('/')
 def index():
-    return """
+    return f"""
     <!DOCTYPE html>
     <html>
     <head>
         <title>🚀 File2Link Server</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 40px; }
-            .container { max-width: 800px; margin: 0 auto; }
-            .header { background: #4CAF50; color: white; padding: 20px; border-radius: 10px; }
+            body {{ font-family: Arial, sans-serif; margin: 40px; }}
+            .container {{ max-width: 800px; margin: 0 auto; }}
+            .header {{ background: #4CAF50; color: white; padding: 20px; border-radius: 10px; }}
+            .status {{ color: #4CAF50; font-weight: bold; }}
         </style>
     </head>
     <body>
@@ -24,12 +25,13 @@ def index():
                 <h1>🚀 File2Link Server</h1>
                 <p>Servidor de archivos funcionando correctamente</p>
             </div>
-            <p>Este servivo proporciona enlaces de descarga directa para archivos subidos al bot de Telegram.</p>
+            <p>Este servidor proporciona enlaces de descarga directa para archivos subidos al bot de Telegram.</p>
             <p><strong>URL Base:</strong> {BASE_URL}</p>
+            <p class="status">✅ Servidor activo y funcionando</p>
         </div>
     </body>
     </html>
-    """.format(BASE_URL=BASE_URL)
+    """
 
 @app.route('/<path:file_path>')
 def serve_file(file_path):
@@ -58,11 +60,19 @@ def serve_file(file_path):
 @app.route('/health')
 def health_check():
     """Endpoint para verificar el estado del servidor"""
-    return jsonify({"status": "ok", "message": "Server is running"})
+    return jsonify({
+        "status": "ok", 
+        "message": "Server is running",
+        "base_url": BASE_URL
+    })
 
 if __name__ == '__main__':
     # Crear directorio server si no existe
     os.makedirs(SERVER_DIR, exist_ok=True)
     
     port = int(os.environ.get('PORT', 5000))
+    print(f"🚀 Starting File2Link server on port {port}")
+    print(f"📁 Server directory: {SERVER_DIR}")
+    print(f"🌐 Base URL: {BASE_URL}")
+    
     app.run(host='0.0.0.0', port=port, debug=False)
