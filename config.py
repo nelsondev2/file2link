@@ -1,8 +1,8 @@
 import os
 
 # Configuración del Bot
-BOT_TOKEN = os.getenv("BOT_TOKEN", "tu_token_aqui")
-BASE_URL = "https://nelson_file2link.onrender.com"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+BASE_URL = "https://nelson-file2link.onrender.com"
 SERVER_DIR = "./server"
 
 # Tamaños máximos (Telegram limita a 2GB para bots)
