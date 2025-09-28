@@ -1,6 +1,7 @@
+import os
 import asyncio
-import threading
-from flask import Flask
+from flask import Flask, send_file, jsonify
+from pathlib import Path
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 
 from config import BOT_TOKEN, SERVER_DIR, BASE_URL
@@ -15,89 +16,72 @@ from bot_handlers import (
     delete_command
 )
 
-def create_flask_app():
-    """Crear aplicación Flask"""
-    app = Flask(__name__)
+# Crear aplicación Flask
+app = Flask(__name__)
 
-    @app.route('/')
-    def index():
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>🚀 File2Link Server</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; }}
-                .container {{ max-width: 800px; margin: 0 auto; }}
-                .header {{ background: #4CAF50; color: white; padding: 20px; border-radius: 10px; }}
-                .status {{ color: #4CAF50; font-weight: bold; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>🚀 File2Link Server</h1>
-                    <p>Servidor de archivos funcionando correctamente</p>
-                </div>
-                <p>Este servidor proporciona enlaces de descarga directa para archivos subidos al bot de Telegram.</p>
-                <p><strong>URL Base:</strong> {BASE_URL}</p>
-                <p class="status">✅ Servidor activo y funcionando</p>
-                <p><strong>🤖 Bot Status:</strong> <span style="color: green;">✅ Conectado</span></p>
+@app.route('/')
+def index():
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>🚀 File2Link Server</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; }}
+            .container {{ max-width: 800px; margin: 0 auto; }}
+            .header {{ background: #4CAF50; color: white; padding: 20px; border-radius: 10px; }}
+            .status {{ color: #4CAF50; font-weight: bold; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🚀 File2Link Server</h1>
+                <p>Servidor de archivos funcionando correctamente</p>
             </div>
-        </body>
-        </html>
-        """
+            <p>Este servidor proporciona enlaces de descarga directa para archivos subidos al bot de Telegram.</p>
+            <p><strong>URL Base:</strong> {BASE_URL}</p>
+            <p class="status">✅ Servidor activo y funcionando</p>
+        </div>
+    </body>
+    </html>
+    """
 
-    @app.route('/<path:file_path>')
-    def serve_file(file_path):
-        """Servir archivos estáticos"""
-        import os
-        from pathlib import Path
-        from flask import send_file
-        
-        full_path = f"{SERVER_DIR}/{file_path}"
-        
-        # Verificar que el archivo existe y está dentro del directorio permitido
-        if not os.path.exists(full_path) or not os.path.isfile(full_path):
-            return "Archivo no encontrado", 404
-        
-        # Verificar seguridad de la ruta
-        try:
-            file_obj = Path(full_path)
-            server_path = Path(SERVER_DIR).resolve()
-            
-            # Asegurar que el archivo está dentro del directorio server
-            if not str(file_obj.resolve()).startswith(str(server_path)):
-                return "Acceso denegado", 403
-        except Exception as e:
-            return "Error de acceso", 403
-        
-        # Servir el archivo con nombre original
-        filename = os.path.basename(full_path)
-        return send_file(full_path, as_attachment=True, download_name=filename)
-
-    @app.route('/health')
-    def health_check():
-        """Endpoint para verificar el estado del servidor"""
-        from flask import jsonify
-        return jsonify({
-            "status": "ok", 
-            "message": "Server is running",
-            "base_url": BASE_URL,
-            "bot_status": "connected"
-        })
+@app.route('/<path:file_path>')
+def serve_file(file_path):
+    """Servir archivos estáticos"""
+    full_path = f"{SERVER_DIR}/{file_path}"
     
-    return app
+    # Verificar que el archivo existe y está dentro del directorio permitido
+    if not os.path.exists(full_path) or not os.path.isfile(full_path):
+        return "Archivo no encontrado", 404
+    
+    # Verificar seguridad de la ruta
+    try:
+        file_obj = Path(full_path)
+        server_path = Path(SERVER_DIR).resolve()
+        
+        # Asegurar que el archivo está dentro del directorio server
+        if not str(file_obj.resolve()).startswith(str(server_path)):
+            return "Acceso denegado", 403
+    except Exception as e:
+        return "Error de acceso", 403
+    
+    # Servir el archivo con nombre original
+    filename = os.path.basename(full_path)
+    return send_file(full_path, as_attachment=True, download_name=filename)
 
-def run_flask_app():
-    """Ejecutar aplicación Flask en un hilo separado"""
-    app = create_flask_app()
-    port = int(os.environ.get('PORT', 5000))
-    print(f"🌐 Starting Flask server on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+@app.route('/health')
+def health_check():
+    """Endpoint para verificar el estado del servidor"""
+    return jsonify({
+        "status": "ok", 
+        "message": "Server is running",
+        "base_url": BASE_URL
+    })
 
-async def run_bot():
-    """Ejecutar bot de Telegram"""
+async def setup_bot():
+    """Configurar y ejecutar el bot de Telegram"""
     # Crear aplicación del bot
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -118,46 +102,43 @@ async def run_bot():
     # Handler de botones
     application.add_handler(CallbackQueryHandler(button_handler))
     
-    # Iniciar bot
-    print("🤖 Starting Telegram Bot...")
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    
-    print("✅ Bot started successfully!")
     return application
 
-def main():
-    """Función principal"""
-    import os
+def start_bot():
+    """Iniciar el bot en un event loop separado"""
+    print("🤖 Starting Telegram Bot...")
     
-    # Crear directorio server si no existe
-    os.makedirs(SERVER_DIR, exist_ok=True)
-    print(f"📁 Server directory created: {SERVER_DIR}")
+    # Crear un nuevo event loop para el bot
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     
-    # Iniciar servidor Flask en un hilo separado
-    flask_thread = threading.Thread(target=run_flask_app, daemon=True)
-    flask_thread.start()
-    
-    # Iniciar bot de Telegram en el hilo principal
     try:
-        bot_app = asyncio.run(run_bot())
+        # Configurar y ejecutar el bot
+        application = loop.run_until_complete(setup_bot())
         
-        # Mantener el programa corriendo
-        print("🚀 Both Flask server and Telegram bot are running!")
-        print("Press Ctrl+C to stop")
+        # Iniciar polling
+        print("✅ Starting bot polling...")
+        application.run_polling()
         
-        # Mantener el hilo principal vivo
-        try:
-            while True:
-                asyncio.sleep(1)
-        except KeyboardInterrupt:
-            print("\n🛑 Stopping bot...")
-            asyncio.run(bot_app.stop())
-            asyncio.run(bot_app.shutdown())
-            
     except Exception as e:
-        print(f"❌ Error starting bot: {e}")
+        print(f"❌ Error in bot: {e}")
+    finally:
+        loop.close()
 
 if __name__ == "__main__":
-    main()
+    # Crear directorio server si no existe
+    os.makedirs(SERVER_DIR, exist_ok=True)
+    print(f"📁 Server directory: {SERVER_DIR}")
+    print(f"🌐 Base URL: {BASE_URL}")
+    
+    # Importar threading solo si es necesario
+    import threading
+    
+    # Iniciar el bot en un hilo separado
+    bot_thread = threading.Thread(target=start_bot, daemon=True)
+    bot_thread.start()
+    
+    # Iniciar Flask en el hilo principal
+    port = int(os.environ.get('PORT', 5000))
+    print(f"🚀 Starting Flask server on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
