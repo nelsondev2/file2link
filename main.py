@@ -16,7 +16,7 @@ import subprocess
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 
-# ===== CONFIGURACIÓN =====
+# ===== CONFIGURACIÓN OPTIMIZADA =====
 API_ID = int(os.getenv("API_ID", "12345678"))
 API_HASH = os.getenv("API_HASH", "tu_api_hash")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "tu_bot_token")
@@ -24,9 +24,53 @@ RENDER_DOMAIN = os.getenv("RENDER_DOMAIN", "https://nelson-file2link.onrender.co
 BASE_DIR = "static"
 PORT = int(os.getenv("PORT", 8080))
 
-# Configuración de compresión (sin límite de partes)
-MAX_PART_SIZE_MB = 100
-COMPRESSION_TIMEOUT = 300  # 5 minutos
+# Configuración optimizada para CPU limitada
+MAX_PART_SIZE_MB = 50  # Reducido para menos carga
+COMPRESSION_TIMEOUT = 600  # 10 minutos máximo
+MAX_CONCURRENT_PROCESSES = 1  # Solo 1 proceso pesado a la vez
+CPU_USAGE_LIMIT = 80  # Límite de uso de CPU
+
+# ===== SISTEMA DE GESTIÓN DE CARGA =====
+class LoadManager:
+    def __init__(self):
+        self.active_processes = 0
+        self.max_processes = MAX_CONCURRENT_PROCESSES
+        self.lock = threading.Lock()
+    
+    def can_start_process(self):
+        """Verifica si se puede iniciar un nuevo proceso pesado"""
+        with self.lock:
+            # Verificar uso actual de CPU
+            cpu_percent = psutil.cpu_percent(interval=1)
+            if cpu_percent > CPU_USAGE_LIMIT:
+                return False, f"❌ CPU sobrecargada ({cpu_percent:.1f}%). Espera un momento."
+            
+            if self.active_processes >= self.max_processes:
+                return False, "❌ Ya hay un proceso en ejecución. Espera a que termine."
+            
+            self.active_processes += 1
+            return True, f"✅ Proceso iniciado (CPU: {cpu_percent:.1f}%)"
+    
+    def finish_process(self):
+        """Marca un proceso como terminado"""
+        with self.lock:
+            self.active_processes = max(0, self.active_processes - 1)
+    
+    def get_status(self):
+        """Obtiene estado actual del sistema"""
+        with self.lock:
+            cpu_percent = psutil.cpu_percent(interval=1)
+            memory = psutil.virtual_memory()
+            return {
+                'active_processes': self.active_processes,
+                'max_processes': self.max_processes,
+                'cpu_percent': cpu_percent,
+                'memory_percent': memory.percent,
+                'can_accept_work': self.active_processes < self.max_processes and cpu_percent < CPU_USAGE_LIMIT
+            }
+
+# Instancia global del gestor de carga
+load_manager = LoadManager()
 
 # ===== LOGGING =====
 logging.basicConfig(
@@ -648,7 +692,20 @@ def file_explorer(user_id):
         </body>
         </html>
         """
-
+# ===== RUTA DE ESTADO DEL SISTEMA =====
+@app.route('/system-status')
+def system_status():
+    """Endpoint para verificar el estado del sistema"""
+    status = load_manager.get_status()
+    return jsonify({
+        "status": "online",
+        "service": "nelson-file2link-optimized",
+        "system_load": status,
+        "timestamp": time.time(),
+        "optimized_for": "low-cpu-environment",
+        "max_file_size_mb": 100,
+        "max_concurrent_processes": MAX_CONCURRENT_PROCESSES
+    })
 # ===== UTILIDADES DE ARCHIVOS =====
 class FileService:
     def __init__(self):
@@ -988,39 +1045,57 @@ class ProgressService:
 progress_service = ProgressService()
 
 # ===== SERVICIO DE COMPRESIÓN (SIN LÍMITE DE PARTES) =====
-class CompressionService:
+# ===== COMPRESIÓN OPTIMIZADA =====
+class OptimizedCompressionService:
+    def __init__(self):
+        self.max_part_size_mb = MAX_PART_SIZE_MB
+        self.compression_level = 1  # Nivel bajo para menos CPU (1-9, donde 1 es más rápido)
+    
     def compress_folder(self, user_id, split_size_mb=None):
-        """Comprime la carpeta del usuario"""
+        """Comprime la carpeta del usuario de forma optimizada"""
         try:
-            user_dir = file_service.get_user_directory(user_id)
-            if not os.path.exists(user_dir):
-                return None, "❌ No tienes archivos para comprimir"
+            # Verificar carga del sistema
+            can_start, message = load_manager.can_start_process()
+            if not can_start:
+                return None, message
             
-            files = os.listdir(user_dir)
-            if not files:
-                return None, "❌ No tienes archivos para comprimir"
-            
-            compress_dir = os.path.join(BASE_DIR, str(user_id), "compressed")
-            os.makedirs(compress_dir, exist_ok=True)
-            
-            timestamp = int(time.time())
-            base_filename = f"backup_{timestamp}"
-            
-            if split_size_mb:
-                return self._compress_split(user_id, user_dir, compress_dir, base_filename, split_size_mb)
-            else:
-                return self._compress_single(user_id, user_dir, compress_dir, base_filename)
+            try:
+                user_dir = file_service.get_user_directory(user_id)
+                if not os.path.exists(user_dir):
+                    return None, "❌ No tienes archivos para comprimir"
+                
+                files = os.listdir(user_dir)
+                if not files:
+                    return None, "❌ No tienes archivos para comprimir"
+                
+                compress_dir = os.path.join(BASE_DIR, str(user_id), "compressed")
+                os.makedirs(compress_dir, exist_ok=True)
+                
+                timestamp = int(time.time())
+                base_filename = f"backup_{timestamp}"
+                
+                if split_size_mb:
+                    result = self._compress_split_optimized(user_id, user_dir, compress_dir, base_filename, split_size_mb)
+                else:
+                    result = self._compress_single_optimized(user_id, user_dir, compress_dir, base_filename)
+                
+                return result
+                
+            finally:
+                load_manager.finish_process()
                 
         except Exception as e:
-            logger.error(f"❌ Error en compresión: {e}")
+            load_manager.finish_process()
+            logger.error(f"❌ Error en compresión optimizada: {e}")
             return None, f"❌ Error al comprimir: {str(e)}"
     
-    def _compress_single(self, user_id, user_dir, compress_dir, base_filename):
-        """Comprime en un solo archivo 7z"""
+    def _compress_single_optimized(self, user_id, user_dir, compress_dir, base_filename):
+        """Compresión simple optimizada"""
         output_file = os.path.join(compress_dir, f"{base_filename}.7z")
         
         try:
-            with py7zr.SevenZipFile(output_file, 'w') as archive:
+            # Usar nivel de compresión bajo para menos CPU
+            with py7zr.SevenZipFile(output_file, 'w', compression_level=self.compression_level) as archive:
                 for file in os.listdir(user_dir):
                     file_path = os.path.join(user_dir, file)
                     if os.path.isfile(file_path):
@@ -1042,22 +1117,25 @@ class CompressionService:
             }], f"✅ Compresión completada: {size_mb:.1f}MB"
             
         except Exception as e:
-            logger.error(f"❌ Error en compresión simple: {e}")
-            return None, f"❌ Error al comprimir: {str(e)}"
+            if os.path.exists(output_file):
+                os.remove(output_file)
+            raise e
     
-    def _compress_split(self, user_id, user_dir, compress_dir, base_filename, split_size_mb):
-        """Comprime y divide en partes (SIN LÍMITE)"""
-        split_size_bytes = split_size_mb * 1024 * 1024
+    def _compress_split_optimized(self, user_id, user_dir, compress_dir, base_filename, split_size_mb):
+        """Compresión dividida optimizada"""
+        split_size_bytes = min(split_size_mb, self.max_part_size_mb) * 1024 * 1024
         
         try:
+            # Primero comprimir con nivel bajo
             temp_file = os.path.join(compress_dir, f"temp_{base_filename}.7z")
             
-            with py7zr.SevenZipFile(temp_file, 'w') as archive:
+            with py7zr.SevenZipFile(temp_file, 'w', compression_level=self.compression_level) as archive:
                 for file in os.listdir(user_dir):
                     file_path = os.path.join(user_dir, file)
                     if os.path.isfile(file_path):
                         archive.write(file_path, file)
             
+            # Dividir el archivo comprimido
             part_files = []
             part_num = 1
             
@@ -1067,7 +1145,6 @@ class CompressionService:
                     if not chunk:
                         break
                     
-                    # SIN LÍMITE DE PARTES - se crean tantas como sean necesarias
                     part_filename = f"{base_filename}.part{part_num:03d}.7z"
                     part_path = os.path.join(compress_dir, part_filename)
                     
@@ -1130,6 +1207,9 @@ class CompressionService:
             logger.error(f"❌ Error limpiando carpeta comprimida: {e}")
             return False, f"❌ Error al eliminar archivos: {str(e)}"
 
+# Reemplazar la instancia global
+compression_service = OptimizedCompressionService()
+
 # Instancia global
 compression_service = CompressionService()
 
@@ -1177,57 +1257,70 @@ class ConversionManager:
 # Instancia global
 conversion_manager = ConversionManager()
 
-# ===== SERVICIO DE CONVERSIÓN DE VIDEOS CON FFMPEG =====
-class VideoConversionService:
+# ===== CONVERSIÓN DE VIDEO OPTIMIZADA =====
+class OptimizedVideoConversionService:
     def __init__(self):
-        self.max_video_size_mb = 50  # Límite de 50 MB por parte
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)  # Solo 2 conversiones simultáneas
+        self.max_video_size_mb = 25  # Reducido para menos procesamiento
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)  # Solo 1 conversión a la vez
+        self.ffmpeg_preset = 'ultrafast'  # Más rápido, menos compresión
+        self.ffmpeg_crf = '32'  # Calidad más baja para archivos más pequeños
     
     def convert_video(self, user_id, file_number, progress_callback=None):
-        """Convierte videos REAL usando FFmpeg a 320x240 con división si es necesario"""
+        """Convierte videos de forma optimizada para CPU limitada"""
         try:
-            # Verificar si la conversión fue detenida
-            if conversion_manager.is_conversion_stopped(user_id, file_number):
-                return None, "❌ Conversión cancelada por el usuario"
+            # Verificar carga del sistema
+            can_start, message = load_manager.can_start_process()
+            if not can_start:
+                return None, message
+            
+            try:
+                # Verificar si la conversión fue detenida
+                if conversion_manager.is_conversion_stopped(user_id, file_number):
+                    return None, "❌ Conversión cancelada por el usuario"
+                    
+                file_info = file_service.get_file_by_number(user_id, file_number)
+                if not file_info:
+                    return None, "❌ Archivo no encontrado"
                 
-            file_info = file_service.get_file_by_number(user_id, file_number)
-            if not file_info:
-                return None, "❌ Archivo no encontrado"
-            
-            # Verificar si es video
-            video_extensions = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.3gp'}
-            file_ext = os.path.splitext(file_info['original_name'].lower())[1]
-            if file_ext not in video_extensions:
-                return None, "❌ El archivo no es un video compatible"
-            
-            original_path = file_info['path']
-            original_size = os.path.getsize(original_path)
-            original_size_mb = original_size / (1024 * 1024)
-            
-            # Verificar si FFmpeg está disponible
-            if not self._check_ffmpeg():
-                return None, "❌ FFmpeg no está instalado. No se puede convertir videos."
-            
-            logger.info(f"🎬 Iniciando conversión REAL con FFmpeg: {file_info['original_name']} ({original_size_mb:.1f} MB)")
-            
-            # Si el video es mayor a 50 MB, dividir en partes
-            if original_size_mb > self.max_video_size_mb:
-                return self._convert_large_video(user_id, file_info, original_path, original_size, progress_callback)
-            else:
-                return self._convert_single_video(user_id, file_info, original_path, original_size, progress_callback)
+                # Verificar si es video
+                video_extensions = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.3gp'}
+                file_ext = os.path.splitext(file_info['original_name'].lower())[1]
+                if file_ext not in video_extensions:
+                    return None, "❌ El archivo no es un video compatible"
+                
+                original_path = file_info['path']
+                original_size = os.path.getsize(original_path)
+                original_size_mb = original_size / (1024 * 1024)
+                
+                # Verificar si FFmpeg está disponible
+                if not self._check_ffmpeg():
+                    return None, "❌ FFmpeg no está instalado. No se puede convertir videos."
+                
+                logger.info(f"🎬 Iniciando conversión OPTIMIZADA: {file_info['original_name']} ({original_size_mb:.1f} MB)")
+                
+                # Para CPU limitada, solo convertir videos pequeños
+                if original_size_mb > 100:  # Límite de 100 MB
+                    return None, "❌ Video demasiado grande para conversión optimizada. Límite: 100MB"
+                
+                # Usar método optimizado para videos pequeños
+                return self._convert_fast_single(user_id, file_info, original_path, original_size, progress_callback)
+                    
+            finally:
+                load_manager.finish_process()
                 
         except Exception as e:
-            logger.error(f"❌ Error en conversión de video: {e}")
+            load_manager.finish_process()
+            logger.error(f"❌ Error en conversión optimizada: {e}")
             return None, f"❌ Error al convertir video: {str(e)}"
         finally:
             # Limpiar registro de conversión
             conversion_manager.remove_conversion(user_id, file_number)
     
-    def _convert_single_video(self, user_id, file_info, original_path, original_size, progress_callback=None):
-        """Convierte un video pequeño (<= 50 MB)"""
+    def _convert_fast_single(self, user_id, file_info, original_path, original_size, progress_callback=None):
+        """Conversión rápida y optimizada para CPU limitada"""
         try:
             if progress_callback:
-                progress_callback(1, 3, "Iniciando conversión...")
+                progress_callback(1, 3, "Iniciando conversión rápida...")
             
             # Verificar si la conversión fue detenida
             if conversion_manager.is_conversion_stopped(user_id, file_info['number']):
@@ -1240,14 +1333,10 @@ class VideoConversionService:
             converted_path = os.path.join(os.path.dirname(original_path), converted_stored_name)
             
             if progress_callback:
-                progress_callback(2, 3, "Ejecutando FFmpeg...")
+                progress_callback(2, 3, "Ejecutando FFmpeg optimizado...")
             
-            # Verificar si la conversión fue detenida
-            if conversion_manager.is_conversion_stopped(user_id, file_info['number']):
-                return None, "❌ Conversión cancelada por el usuario"
-            
-            # CONVERSIÓN REAL CON FFMPEG
-            success, error_message = self._convert_with_ffmpeg(original_path, converted_path, user_id, file_info['number'])
+            # CONVERSIÓN OPTIMIZADA - Configuración para velocidad
+            success, error_message = self._convert_fast_ffmpeg(original_path, converted_path, user_id, file_info['number'])
             
             if not success:
                 return None, f"❌ Error en conversión FFmpeg: {error_message}"
@@ -1267,7 +1356,7 @@ class VideoConversionService:
             
             converted_size = os.path.getsize(converted_path)
             
-            # Calcular reducción REAL
+            # Calcular reducción
             size_reduction = ((original_size - converted_size) / original_size) * 100
             
             # Eliminar archivo original
@@ -1298,257 +1387,42 @@ class VideoConversionService:
                 'reduction_percent': size_reduction,
                 'download_url': download_url,
                 'parts': 1
-            }, "✅ Conversión REAL completada con FFmpeg"
+            }, "✅ Conversión RÁPIDA completada"
             
         except Exception as e:
-            logger.error(f"❌ Error en conversión simple de video: {e}")
+            logger.error(f"❌ Error en conversión rápida: {e}")
             return None, f"❌ Error al convertir video: {str(e)}"
     
-    def _convert_large_video(self, user_id, file_info, original_path, original_size, progress_callback=None):
-        """Convierte un video grande (> 50 MB) dividiéndolo en partes"""
-        try:
-            total_parts = self._calculate_parts_needed(original_size)
-            converted_parts = []
-            
-            if progress_callback:
-                progress_callback(0, total_parts + 2, f"Dividiendo video en {total_parts} partes...")
-            
-            # Verificar si la conversión fue detenida
-            if conversion_manager.is_conversion_stopped(user_id, file_info['number']):
-                return None, "❌ Conversión cancelada por el usuario"
-            
-            # Dividir video en partes
-            part_paths = self._split_video(original_path, total_parts, progress_callback, user_id, file_info['number'])
-            if not part_paths:
-                return None, "❌ Error al dividir el video en partes"
-            
-            # Convertir cada parte
-            converted_part_paths = []
-            for i, part_path in enumerate(part_paths):
-                # Verificar si la conversión fue detenida
-                if conversion_manager.is_conversion_stopped(user_id, file_info['number']):
-                    # Limpiar partes temporales
-                    for path in part_paths + converted_part_paths:
-                        if os.path.exists(path):
-                            os.remove(path)
-                    return None, "❌ Conversión cancelada por el usuario"
-                
-                if progress_callback:
-                    progress_callback(i + 1, total_parts + 2, f"Convirtiendo parte {i+1}/{total_parts}...")
-                
-                converted_part_path = part_path.replace('.mp4', '_converted.mp4')
-                success, error = self._convert_with_ffmpeg(part_path, converted_part_path, user_id, file_info['number'])
-                
-                if not success:
-                    # Limpiar partes temporales
-                    for path in part_paths + converted_part_paths:
-                        if os.path.exists(path):
-                            os.remove(path)
-                    return None, f"❌ Error convirtiendo parte {i+1}: {error}"
-                
-                converted_part_paths.append(converted_part_path)
-                # Eliminar parte original después de convertir
-                if os.path.exists(part_path):
-                    os.remove(part_path)
-            
-            # Verificar si la conversión fue detenida
-            if conversion_manager.is_conversion_stopped(user_id, file_info['number']):
-                for path in converted_part_paths:
-                    if os.path.exists(path):
-                        os.remove(path)
-                return None, "❌ Conversión cancelada por el usuario"
-            
-            if progress_callback:
-                progress_callback(total_parts + 1, total_parts + 2, "Uniendo partes convertidas...")
-            
-            # Unir partes convertidas
-            original_name_no_ext = os.path.splitext(file_info['original_name'])[0]
-            final_converted_name = f"{original_name_no_ext}_converted.mp4"
-            final_converted_stored_name = f"{file_info['number']:03d}_{final_converted_name}"
-            final_converted_path = os.path.join(os.path.dirname(original_path), final_converted_stored_name)
-            
-            success = self._merge_video_parts(converted_part_paths, final_converted_path)
-            
-            # Limpiar partes temporales convertidas
-            for part_path in converted_part_paths:
-                if os.path.exists(part_path):
-                    os.remove(part_path)
-            
-            if not success:
-                return None, "❌ Error al unir las partes convertidas"
-            
-            # Verificar archivo final
-            if not os.path.exists(final_converted_path):
-                return None, "❌ Error: Archivo final convertido no se creó"
-            
-            final_size = os.path.getsize(final_converted_path)
-            size_reduction = ((original_size - final_size) / original_size) * 100
-            
-            # Eliminar archivo original
-            try:
-                os.remove(original_path)
-            except Exception as e:
-                logger.error(f"Error eliminando original: {e}")
-            
-            # Actualizar metadata
-            file_service.metadata[f"{user_id}_download"]["files"][str(file_info['number'])] = {
-                "original_name": final_converted_name,
-                "stored_name": final_converted_stored_name,
-                "registered_at": time.time(),
-                "converted_from": file_info['original_name'],
-                "original_size": original_size,
-                "converted_size": final_size,
-                "reduction_percent": size_reduction,
-                "parts_used": total_parts
-            }
-            file_service.save_metadata()
-            
-            download_url = file_service.create_download_url(user_id, final_converted_stored_name)
-            
-            return {
-                'original_name': file_info['original_name'],
-                'converted_name': final_converted_name,
-                'original_size': original_size,
-                'converted_size': final_size,
-                'reduction_percent': size_reduction,
-                'download_url': download_url,
-                'parts': total_parts
-            }, f"✅ Conversión completada ({total_parts} partes)"
-            
-        except Exception as e:
-            logger.error(f"❌ Error en conversión de video grande: {e}")
-            return None, f"❌ Error al convertir video grande: {str(e)}"
-    
-    def _calculate_parts_needed(self, file_size):
-        """Calcula cuántas partes de 50 MB se necesitan"""
-        size_mb = file_size / (1024 * 1024)
-        return max(1, int(size_mb // self.max_video_size_mb) + 1)
-    
-    def _split_video(self, input_path, total_parts, progress_callback=None, user_id=None, file_number=None):
-        """Divide un video en partes usando FFmpeg"""
-        try:
-            # Verificar si la conversión fue detenida
-            if user_id and file_number and conversion_manager.is_conversion_stopped(user_id, file_number):
-                return None
-                
-            # Obtener duración del video
-            cmd = ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', input_path]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            duration = float(result.stdout.strip())
-            
-            part_duration = duration / total_parts
-            part_paths = []
-            
-            for i in range(total_parts):
-                # Verificar si la conversión fue detenida
-                if user_id and file_number and conversion_manager.is_conversion_stopped(user_id, file_number):
-                    # Limpiar partes creadas
-                    for path in part_paths:
-                        if os.path.exists(path):
-                            os.remove(path)
-                    return None
-                
-                start_time = i * part_duration
-                part_path = input_path.replace('.mp4', f'_part{i+1:03d}.mp4').replace('.avi', f'_part{i+1:03d}.mp4').replace('.mkv', f'_part{i+1:03d}.mp4')
-                
-                cmd = [
-                    'ffmpeg', '-i', input_path,
-                    '-ss', str(start_time),
-                    '-t', str(part_duration),
-                    '-c', 'copy',
-                    '-y', part_path
-                ]
-                
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode != 0:
-                    # Limpiar partes creadas
-                    for path in part_paths:
-                        if os.path.exists(path):
-                            os.remove(path)
-                    return None
-                
-                part_paths.append(part_path)
-                
-                if progress_callback:
-                    progress_callback(i, total_parts, f"Parte {i+1}/{total_parts} creada")
-            
-            return part_paths
-            
-        except Exception as e:
-            logger.error(f"❌ Error dividiendo video: {e}")
-            # Limpiar partes
-            for path in part_paths:
-                if os.path.exists(path):
-                    os.remove(path)
-            return None
-    
-    def _merge_video_parts(self, part_paths, output_path):
-        """Une partes de video usando FFmpeg"""
-        try:
-            # Crear archivo de lista para ffmpeg
-            list_file = output_path + '_list.txt'
-            with open(list_file, 'w') as f:
-                for part_path in part_paths:
-                    f.write(f"file '{os.path.abspath(part_path)}'\n")
-            
-            cmd = [
-                'ffmpeg', '-f', 'concat',
-                '-safe', '0',
-                '-i', list_file,
-                '-c', 'copy',
-                '-y', output_path
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            # Eliminar archivo de lista
-            if os.path.exists(list_file):
-                os.remove(list_file)
-            
-            return result.returncode == 0
-            
-        except Exception as e:
-            logger.error(f"❌ Error uniendo video: {e}")
-            return False
-    
-    def _check_ffmpeg(self):
-        """Verifica si FFmpeg está disponible en el sistema"""
-        try:
-            result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
-            return result.returncode == 0
-        except:
-            return False
-    
-    def _convert_with_ffmpeg(self, input_path, output_path, user_id=None, file_number=None):
-        """Ejecuta la conversión REAL con FFmpeg"""
+    def _convert_fast_ffmpeg(self, input_path, output_path, user_id=None, file_number=None):
+        """Conversión FFmpeg optimizada para velocidad"""
         try:
             # Verificar si la conversión fue detenida
             if user_id and file_number and conversion_manager.is_conversion_stopped(user_id, file_number):
                 return False, "Conversión cancelada por el usuario"
                 
-            # Comando FFmpeg para convertir a 320x240 con compresión optimizada
+            # Comando FFmpeg OPTIMIZADO para velocidad (menos calidad pero más rápido)
             cmd = [
                 'ffmpeg',
                 '-i', input_path,           # Archivo de entrada
                 '-vf', 'scale=320:240',     # Redimensionar a 320x240
                 '-c:v', 'libx264',          # Codec video H.264
-                '-crf', '28',               # Calidad (23-28 para compresión balanceada)
-                '-preset', 'medium',        # Velocidad de compresión
+                '-crf', self.ffmpeg_crf,    # Calidad más baja para archivos más pequeños
+                '-preset', self.ffmpeg_preset,  # Velocidad máxima de compresión
                 '-c:a', 'aac',              # Codec audio AAC
-                '-b:a', '64k',              # Bitrate audio 64k
+                '-b:a', '32k',              # Bitrate audio más bajo
                 '-movflags', '+faststart',  # Optimizar para web
                 '-y',                       # Sobrescribir si existe
                 output_path                 # Archivo de salida
             ]
             
-            logger.info(f"🔧 Ejecutando FFmpeg: {' '.join(cmd)}")
+            logger.info(f"🔧 Ejecutando FFmpeg OPTIMIZADO: {' '.join(cmd)}")
             
-            # Ejecutar conversión
+            # Ejecutar conversión con timeout reducido
             result = subprocess.run(
                 cmd, 
                 capture_output=True, 
                 text=True, 
-                timeout=600  # 10 minutos timeout
+                timeout=300  # 5 minutos timeout (reducido)
             )
             
             # Verificar si la conversión fue detenida durante la ejecución
@@ -1562,15 +1436,26 @@ class VideoConversionService:
                 logger.error(f"❌ FFmpeg error: {error_msg}")
                 return False, error_msg
             
-            logger.info("✅ Conversión FFmpeg completada exitosamente")
+            logger.info("✅ Conversión FFmpeg OPTIMIZADA completada exitosamente")
             return True, None
             
         except subprocess.TimeoutExpired:
-            logger.error("❌ FFmpeg timeout (10 minutos)")
-            return False, "La conversión tardó demasiado tiempo (más de 10 minutos)"
+            logger.error("❌ FFmpeg timeout (5 minutos)")
+            return False, "La conversión tardó demasiado tiempo (más de 5 minutos)"
         except Exception as e:
             logger.error(f"❌ Error ejecutando FFmpeg: {e}")
             return False, str(e)
+    
+    def _check_ffmpeg(self):
+        """Verifica si FFmpeg está disponible en el sistema"""
+        try:
+            result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+            return result.returncode == 0
+        except:
+            return False
+
+# Reemplazar la instancia global
+video_service = OptimizedVideoConversionService()
 
 # Instancia global
 video_service = VideoConversionService()
@@ -1673,14 +1558,15 @@ async def files_command(client, message):
         await message.reply_text("❌ **Error al listar archivos.** Por favor, intenta nuevamente.")
 
 async def status_command(client, message):
-    """Maneja el comando /status"""
+    """Maneja el comando /status - AHORA CON INFO DE CARGA"""
     try:
         user_id = message.from_user.id
         files = file_service.list_user_files(user_id)
         total_size = file_service.get_user_storage_usage(user_id)
         size_mb = total_size / (1024 * 1024)
         
-        # Verificar FFmpeg
+        # Obtener estado del sistema
+        system_status = load_manager.get_status()
         ffmpeg_status = "✅ Disponible" if video_service._check_ffmpeg() else "❌ No disponible"
         
         status_text = f"""📊 **Estado del Sistema - {message.from_user.first_name}**
@@ -1688,17 +1574,288 @@ async def status_command(client, message):
 👤 **Usuario:** {user_id}
 📁 **Archivos Almacenados:** {len(files)}
 💾 **Espacio Utilizado:** {size_mb:.2f} MB
-🎬 **Conversión de Video:** {ffmpeg_status}
-🔗 **Tu URL Personal:** {RENDER_DOMAIN}/static/{user_id}/download/
-🌐 **Explorador Web:** {RENDER_DOMAIN}/files/{user_id}
 
-🚀 **Estado del Servicio:** ✅ **OPERATIVO**"""
+⚙️ **Estado del Servidor:**
+• 🎬 **Conversión de Video:** {ffmpeg_status}
+• 🔄 **Procesos Activos:** {system_status['active_processes']}/{system_status['max_processes']}
+• 💻 **Uso de CPU:** {system_status['cpu_percent']:.1f}%
+• 🧠 **Uso de Memoria:** {system_status['memory_percent']:.1f}%
+• 🚦 **Estado:** {"✅ ACEPTANDO TRABAJO" if system_status['can_accept_work'] else "⚠️ SOBRECARGADO"}
+
+🔗 **Tu URL Personal:** {RENDER_DOMAIN}/static/{user_id}/download/
+🌐 **Explorador Web:** {RENDER_DOMAIN}/files/{user_id}"""
         
         await message.reply_text(status_text)
         
     except Exception as e:
         logger.error(f"Error en /status: {e}")
         await message.reply_text("❌ **Error al obtener estado del sistema.**")
+
+async def compress_command(client, message):
+    """Maneja el comando /compress - AHORA CON VERIFICACIÓN DE CARGA"""
+    try:
+        user_id = message.from_user.id
+        command_parts = message.text.split()
+        
+        # Verificar estado del sistema primero
+        system_status = load_manager.get_status()
+        if not system_status['can_accept_work']:
+            await message.reply_text(
+                f"⚠️ **Sistema sobrecargado en este momento.**\n\n"
+                f"• CPU: {system_status['cpu_percent']:.1f}%\n"
+                f"• Procesos activos: {system_status['active_processes']}\n"
+                f"• Intenta nuevamente en unos minutos."
+            )
+            return
+        
+        split_size = None
+        if len(command_parts) > 1:
+            try:
+                split_size = int(command_parts[1])
+                if split_size <= 0:
+                    await message.reply_text("❌ **El tamaño de división debe ser mayor a 0 MB**")
+                    return
+                if split_size > 50:  # Reducido el límite máximo
+                    await message.reply_text("❌ **El tamaño máximo por parte es 50 MB**")
+                    return
+            except ValueError:
+                await message.reply_text("❌ **Formato incorrecto.** Usa: `/compress` o `/compress 10`")
+                return
+        
+        # Mensaje de inicio
+        status_msg = await message.reply_text(
+            "🔄 **Iniciando proceso de compresión OPTIMIZADA...**\n\n"
+            "⏳ Esto puede tomar varios minutos...\n"
+            "💡 **Modo optimizado para CPU limitada**"
+        )
+        
+        # Ejecutar compresión optimizada
+        def run_optimized_compression():
+            try:
+                files, status_message = compression_service.compress_folder(user_id, split_size)
+                return files, status_message
+            except Exception as e:
+                logger.error(f"Error en compresión optimizada: {e}")
+                return None, f"❌ **Error en compresión:** {str(e)}"
+        
+        # Ejecutar en thread
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_optimized_compression)
+            files, status_message = future.result(timeout=300)  # 5 minutos timeout
+        
+        if not files:
+            await status_msg.edit_text(status_message)
+            return
+        
+        # Crear mensaje con los enlaces
+        if len(files) == 1:
+            # Un solo archivo
+            file_info = files[0]
+            response_text = f"""✅ **Compresión Completada Exitosamente**
+
+📦 **Archivo #{file_info['number']}:** `{file_info['filename']}`
+💾 **Tamaño Comprimido:** {file_info['size_mb']:.1f} MB
+
+🔗 **Enlace de Descarga:**
+📎 [{file_info['filename']}]({file_info['url']})"""
+            
+            # Agregar botón para limpiar
+            clear_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗑️ Vaciar Archivos Comprimidos", callback_data="clear_compressed")]
+            ])
+            
+            await status_msg.edit_text(
+                response_text, 
+                disable_web_page_preview=True,
+                reply_markup=clear_keyboard
+            )
+            
+        else:
+            # Múltiples partes
+            response_text = f"""✅ **Compresión Completada Exitosamente**
+
+📦 **Archivos Generados:** {len(files)} partes
+💾 **Tamaño Total:** {sum(f['size_mb'] for f in files):.1f} MB
+
+🔗 **Enlaces de Descarga:**\n"""
+            
+            for file_info in files:
+                response_text += f"\n**Parte {file_info['number']}:** 📎 [{file_info['filename']}]({file_info['url']})"
+            
+            # Telegram limita a 4096 caracteres por mensaje
+            if len(response_text) > 4000:
+                # Enviar mensajes divididos
+                await status_msg.edit_text("✅ **Compresión completada exitosamente**\n\n📦 **Los enlaces se enviarán en varios mensajes...**")
+                
+                for file_info in files:
+                    part_text = f"**Parte {file_info['number']}:** 📎 [{file_info['filename']}]({file_info['url']})"
+                    await message.reply_text(part_text, disable_web_page_preview=True)
+                
+                # Agregar botón para limpiar en un mensaje separado
+                clear_keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🗑️ Vaciar Archivos Comprimidos", callback_data="clear_compressed")]
+                ])
+                await message.reply_text(
+                    "💡 **¿Quieres liberar espacio?**",
+                    reply_markup=clear_keyboard
+                )
+            else:
+                # Agregar botón para limpiar
+                clear_keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🗑️ Vaciar Archivos Comprimidos", callback_data="clear_compressed")]
+                ])
+                
+                await status_msg.edit_text(
+                    response_text, 
+                    disable_web_page_preview=True,
+                    reply_markup=clear_keyboard
+                )
+                
+        logger.info(f"✅ Compresión completada para usuario {user_id}: {len(files)} archivos")
+        
+    except concurrent.futures.TimeoutError:
+        await status_msg.edit_text("❌ **La compresión tardó demasiado tiempo.** Intenta con menos archivos o tamaños más pequeños.")
+    except Exception as e:
+        logger.error(f"❌ Error en comando /compress: {e}")
+        await message.reply_text("❌ **Error en el proceso de compresión.** Por favor, intenta nuevamente.")
+
+async def convert_command(client, message):
+    """Maneja el comando /convert - AHORA CON VERIFICACIÓN DE CARGA"""
+    try:
+        user_id = message.from_user.id
+        
+        # Verificar estado del sistema primero
+        system_status = load_manager.get_status()
+        if not system_status['can_accept_work']:
+            await message.reply_text(
+                f"⚠️ **Sistema sobrecargado en este momento.**\n\n"
+                f"• CPU: {system_status['cpu_percent']:.1f}%\n"
+                f"• Procesos activos: {system_status['active_processes']}\n"
+                f"• Intenta nuevamente en unos minutos."
+            )
+            return
+        
+        command_parts = message.text.split()
+        
+        if len(command_parts) < 2:
+            await message.reply_text("❌ **Formato incorrecto.** Usa: `/convert número`")
+            return
+        
+        try:
+            file_number = int(command_parts[1])
+        except ValueError:
+            await message.reply_text("❌ **El número debe ser un valor numérico válido.**")
+            return
+        
+        # Verificar si FFmpeg está disponible
+        if not video_service._check_ffmpeg():
+            await message.reply_text(
+                "❌ **FFmpeg no está disponible en este servidor.**\n\n"
+                "La conversión REAL de videos no puede realizarse en este momento."
+            )
+            return
+        
+        # Verificar tamaño del archivo
+        file_info = file_service.get_file_by_number(user_id, file_number)
+        if file_info:
+            file_size = os.path.getsize(file_info['path'])
+            file_size_mb = file_size / (1024 * 1024)
+            if file_size_mb > 100:  # Límite de 100 MB
+                await message.reply_text(
+                    f"❌ **Video demasiado grande para conversión optimizada.**\n\n"
+                    f"• Tamaño actual: {file_size_mb:.1f} MB\n"
+                    f"• Límite máximo: 100 MB\n"
+                    f"• **Sugerencia:** Comprime el video primero o divide en partes más pequeñas."
+                )
+                return
+        
+        # Registrar conversión activa
+        conversion_key = conversion_manager.start_conversion(user_id, file_number, message.id)
+        
+        # Mensaje de inicio con información de modo optimizado
+        cancel_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⏹️ Cancelar Conversión", callback_data=f"stop_convert_{user_id}_{file_number}")]
+        ])
+        
+        status_msg = await message.reply_text(
+            "🔄 **Iniciando conversión RÁPIDA optimizada...**\n\n"
+            "⏳ **Procesando en modo velocidad (calidad reducida)**\n"
+            "📊 **Progreso:** `[░░░░░░░░░░░░░░░] 0.0%`\n\n"
+            "💡 **Conversión optimizada para CPU limitada**",
+            reply_markup=cancel_keyboard
+        )
+        
+        # Función para ejecutar la conversión en un hilo separado
+        async def run_conversion_async():
+            try:
+                # Variables para progreso
+                current_progress = {"step": 0, "total_steps": 3, "part": 0, "total_parts": 1}
+                
+                def progress_callback(current, total, message_text=""):
+                    """Callback para actualizar progreso (se ejecuta en el hilo de conversión)"""
+                    current_progress["step"] = current
+                    current_progress["total_steps"] = total
+                    
+                    # Usar asyncio para actualizar el mensaje de Telegram
+                    asyncio.run_coroutine_threadsafe(
+                        update_progress_message(current, total, current_progress),
+                        client.loop
+                    )
+                
+                # Ejecutar conversión en el ThreadPoolExecutor
+                loop = asyncio.get_event_loop()
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = loop.run_in_executor(
+                        executor, 
+                        lambda: video_service.convert_video(user_id, file_number, progress_callback)
+                    )
+                    result, status_message = await asyncio.wait_for(future, timeout=1800)  # 30 minutos timeout
+                
+                return result, status_message
+                
+            except asyncio.TimeoutError:
+                return None, "❌ **La conversión tardó demasiado tiempo (más de 30 minutos).**"
+            except Exception as e:
+                logger.error(f"Error en conversión async: {e}")
+                return None, f"❌ **Error en conversión:** {str(e)}"
+        
+        async def update_progress_message(current, total, progress_data):
+            """Actualiza el mensaje de progreso en Telegram"""
+            try:
+                # Verificar si la conversión fue cancelada
+                if conversion_manager.is_conversion_stopped(user_id, file_number):
+                    return
+                    
+                progress_text = progress_service.create_conversion_progress(
+                    filename="Procesando video...",
+                    current_part=progress_data["part"],
+                    total_parts=progress_data["total_parts"],
+                    current_step=current,
+                    total_steps=total,
+                    process_type="Conversión de Video"
+                )
+                
+                # Mantener el botón de cancelar
+                updated_keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⏹️ Cancelar Conversión", callback_data=f"stop_convert_{user_id}_{file_number}")]
+                ])
+                
+                await status_msg.edit_text(
+                    f"{progress_text}\n\n💡 **Conversión optimizada para CPU limitada**",
+                    reply_markup=updated_keyboard
+                )
+            except Exception as e:
+                logger.error(f"Error actualizando progreso: {e}")
+        
+        # Ejecutar la conversión en segundo plano sin bloquear
+        asyncio.create_task(execute_conversion(user_id, file_number, status_msg, run_conversion_async))
+        
+        logger.info(f"🎬 Conversión optimizada iniciada para usuario {user_id}, archivo {file_number}")
+        
+    except Exception as e:
+        conversion_manager.remove_conversion(user_id, file_number)
+        logger.error(f"❌ Error en comando /convert: {e}")
+        await message.reply_text("❌ **Error al iniciar la conversión.** Por favor, intenta nuevamente.")
 
 async def compress_command(client, message):
     """Maneja el comando /compress"""
