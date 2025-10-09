@@ -9,7 +9,7 @@ import sys
 import urllib.parse
 import hashlib
 import concurrent.futures
-import py7zr
+import zipfile  # Cambiamos py7zr por zipfile
 import json
 import shutil
 import subprocess
@@ -26,7 +26,7 @@ BASE_DIR = "static"
 PORT = int(os.getenv("PORT", 8080))
 
 # Configuración optimizada para CPU limitada
-MAX_PART_SIZE_MB = 50  # Reducido para menos carga
+MAX_PART_SIZE_MB = 100  # Aumentado para empaquetado simple
 COMPRESSION_TIMEOUT = 600  # 10 minutos máximo
 MAX_CONCURRENT_PROCESSES = 1  # Solo 1 proceso pesado a la vez
 CPU_USAGE_LIMIT = 80  # Límite de uso de CPU
@@ -279,9 +279,9 @@ def home():
                 </div>
                 
                 <div class="feature-card">
-                    <div class="feature-icon">🔗</div>
-                    <h4>Enlaces Permanentes</h4>
-                    <p>Enlaces web permanentes para todos tus archivos</p>
+                    <div class="feature-icon">📦</div>
+                    <h4>Empaquetado Simple</h4>
+                    <p>Une todos tus archivos en un ZIP sin compresión</p>
                 </div>
             </div>
 
@@ -332,18 +332,18 @@ def serve_download(user_id, filename):
     user_download_dir = os.path.join(BASE_DIR, user_id, "download")
     return send_from_directory(user_download_dir, filename)
 
-@app.route('/static/<user_id>/compressed/<filename>')
-def serve_compressed(user_id, filename):
-    """Sirve archivos comprimidos"""
-    user_compress_dir = os.path.join(BASE_DIR, user_id, "compressed")
-    return send_from_directory(user_compress_dir, filename)
+@app.route('/static/<user_id>/packed/<filename>')
+def serve_packed(user_id, filename):
+    """Sirve archivos empaquetados"""
+    user_packed_dir = os.path.join(BASE_DIR, user_id, "packed")
+    return send_from_directory(user_packed_dir, filename)
 
 @app.route('/files/<user_id>')
 def file_explorer(user_id):
     """Explorador web moderno de archivos para el usuario"""
     try:
         user_dir = os.path.join(BASE_DIR, user_id, "download")
-        compressed_dir = os.path.join(BASE_DIR, user_id, "compressed")
+        packed_dir = os.path.join(BASE_DIR, user_id, "packed")
         
         # Obtener archivos normales
         normal_files = []
@@ -362,27 +362,27 @@ def file_explorer(user_id):
                         'type': 'normal'
                     })
         
-        # Obtener archivos comprimidos
-        compressed_files = []
-        total_compressed_size = 0
-        if os.path.exists(compressed_dir):
-            for filename in sorted(os.listdir(compressed_dir)):
-                file_path = os.path.join(compressed_dir, filename)
+        # Obtener archivos empaquetados
+        packed_files = []
+        total_packed_size = 0
+        if os.path.exists(packed_dir):
+            for filename in sorted(os.listdir(packed_dir)):
+                file_path = os.path.join(packed_dir, filename)
                 if os.path.isfile(file_path):
                     size = os.path.getsize(file_path)
-                    total_compressed_size += size
-                    compressed_files.append({
+                    total_packed_size += size
+                    packed_files.append({
                         'name': filename,
                         'size': size,
                         'size_mb': size / (1024 * 1024),
-                        'url': f"{RENDER_DOMAIN}/static/{user_id}/compressed/{urllib.parse.quote(filename)}",
-                        'type': 'compressed'
+                        'url': f"{RENDER_DOMAIN}/static/{user_id}/packed/{urllib.parse.quote(filename)}",
+                        'type': 'packed'
                     })
         
         # Combinar todos los archivos
-        all_files = normal_files + compressed_files
+        all_files = normal_files + packed_files
         total_files = len(all_files)
-        total_size_mb = (total_normal_size + total_compressed_size) / (1024 * 1024)
+        total_size_mb = (total_normal_size + total_packed_size) / (1024 * 1024)
         
         html = f"""
         <!DOCTYPE html>
@@ -522,9 +522,9 @@ def file_explorer(user_id):
                     color: #155724;
                 }}
                 
-                .type-compressed {{
-                    background: #fff3cd;
-                    color: #856404;
+                .type-packed {{
+                    background: #d1ecf1;
+                    color: #0c5460;
                 }}
                 
                 .file-size {{
@@ -587,8 +587,8 @@ def file_explorer(user_id):
                             <p>Archivos Normales</p>
                         </div>
                         <div class="stat-card">
-                            <h3>{len(compressed_files)}</h3>
-                            <p>Archivos Comprimidos</p>
+                            <h3>{len(packed_files)}</h3>
+                            <p>Archivos Empaquetados</p>
                         </div>
                         <div class="stat-card">
                             <h3>{total_size_mb:.1f}</h3>
@@ -659,7 +659,7 @@ def file_explorer(user_id):
                 
                 {"".join([f'''
                 <div class="file-browser" style="margin-top: 20px;">
-                    <h3 class="section-title">🗜️ Archivos Comprimidos ({len(compressed_files)})</h3>
+                    <h3 class="section-title">📦 Archivos Empaquetados ({len(packed_files)})</h3>
                     <table class="file-table">
                         <thead>
                             <tr>
@@ -675,13 +675,13 @@ def file_explorer(user_id):
                                     <a href="{file['url']}" class="file-link">{file['name']}</a>
                                 </td>
                                 <td class="file-size">{file['size_mb']:.2f} MB</td>
-                                <td><span class="file-type type-compressed">Comprimido</span></td>
+                                <td><span class="file-type type-packed">Empaquetado</span></td>
                             </tr>
-                            """ for file in compressed_files])}
+                            """ for file in packed_files])}
                         </tbody>
                     </table>
                 </div>
-                ''' for _ in [1] if compressed_files])}
+                ''' for _ in [1] if packed_files])}
             </div>
         </body>
         </html>
@@ -784,6 +784,12 @@ class FileService:
         safe_filename = self.sanitize_filename(filename)
         encoded_filename = urllib.parse.quote(safe_filename)
         return f"{RENDER_DOMAIN}/static/{user_id}/download/{encoded_filename}"
+
+    def create_packed_url(self, user_id, filename):
+        """Crea una URL para archivos empaquetados"""
+        safe_filename = self.sanitize_filename(filename)
+        encoded_filename = urllib.parse.quote(safe_filename)
+        return f"{RENDER_DOMAIN}/static/{user_id}/packed/{encoded_filename}"
 
     def get_user_directory(self, user_id):
         """Obtiene el directorio del usuario"""
@@ -1098,14 +1104,13 @@ class ProgressService:
 # Instancia global
 progress_service = ProgressService()
 
-# ===== COMPRESIÓN OPTIMIZADA =====
-class OptimizedCompressionService:
+# ===== EMPAQUETADO SIMPLE (SIN COMPRESIÓN) =====
+class SimplePackingService:
     def __init__(self):
         self.max_part_size_mb = MAX_PART_SIZE_MB
-        self.compression_level = 1  # Nivel bajo para menos CPU (1-9, donde 1 es más rápido)
     
-    def compress_folder(self, user_id, split_size_mb=None):
-        """Comprime la carpeta del usuario de forma optimizada"""
+    def pack_folder(self, user_id, split_size_mb=None):
+        """Empaqueta la carpeta del usuario SIN compresión"""
         try:
             # Verificar carga del sistema
             can_start, message = load_manager.can_start_process()
@@ -1115,22 +1120,22 @@ class OptimizedCompressionService:
             try:
                 user_dir = file_service.get_user_directory(user_id)
                 if not os.path.exists(user_dir):
-                    return None, "❌ No tienes archivos para comprimir"
+                    return None, "❌ No tienes archivos para empaquetar"
                 
                 files = os.listdir(user_dir)
                 if not files:
-                    return None, "❌ No tienes archivos para comprimir"
+                    return None, "❌ No tienes archivos para empaquetar"
                 
-                compress_dir = os.path.join(BASE_DIR, str(user_id), "compressed")
-                os.makedirs(compress_dir, exist_ok=True)
+                packed_dir = os.path.join(BASE_DIR, str(user_id), "packed")
+                os.makedirs(packed_dir, exist_ok=True)
                 
                 timestamp = int(time.time())
-                base_filename = f"backup_{timestamp}"
+                base_filename = f"packed_files_{timestamp}"
                 
                 if split_size_mb:
-                    result = self._compress_split_optimized(user_id, user_dir, compress_dir, base_filename, split_size_mb)
+                    result = self._pack_split_simple(user_id, user_dir, packed_dir, base_filename, split_size_mb)
                 else:
-                    result = self._compress_single_optimized(user_id, user_dir, compress_dir, base_filename)
+                    result = self._pack_single_simple(user_id, user_dir, packed_dir, base_filename)
                 
                 return result
                 
@@ -1139,56 +1144,56 @@ class OptimizedCompressionService:
                 
         except Exception as e:
             load_manager.finish_process()
-            logger.error(f"❌ Error en compresión optimizada: {e}")
-            return None, f"❌ Error al comprimir: {str(e)}"
+            logger.error(f"❌ Error en empaquetado simple: {e}")
+            return None, f"❌ Error al empaquetar: {str(e)}"
     
-    def _compress_single_optimized(self, user_id, user_dir, compress_dir, base_filename):
-        """Compresión simple optimizada"""
-        output_file = os.path.join(compress_dir, f"{base_filename}.7z")
+    def _pack_single_simple(self, user_id, user_dir, packed_dir, base_filename):
+        """Empaqueta en un solo archivo ZIP SIN compresión"""
+        output_file = os.path.join(packed_dir, f"{base_filename}.zip")
         
         try:
-            # Usar nivel de compresión bajo para menos CPU
-            with py7zr.SevenZipFile(output_file, 'w', compression_level=self.compression_level) as archive:
+            # Crear ZIP sin compresión (STORED)
+            with zipfile.ZipFile(output_file, 'w', compression=zipfile.ZIP_STORED) as zipf:
                 for file in os.listdir(user_dir):
                     file_path = os.path.join(user_dir, file)
                     if os.path.isfile(file_path):
-                        archive.write(file_path, file)
+                        zipf.write(file_path, file)
             
             file_size = os.path.getsize(output_file)
             size_mb = file_size / (1024 * 1024)
             
-            # Registrar archivo comprimido
-            file_num = file_service.register_file(user_id, f"{base_filename}.7z", f"{base_filename}.7z", "compressed")
+            # Registrar archivo empaquetado
+            file_num = file_service.register_file(user_id, f"{base_filename}.zip", f"{base_filename}.zip", "packed")
             
-            download_url = f"{RENDER_DOMAIN}/static/{user_id}/compressed/{base_filename}.7z"
+            download_url = file_service.create_packed_url(user_id, f"{base_filename}.zip")
             
             return [{
                 'number': file_num,
-                'filename': f"{base_filename}.7z",
+                'filename': f"{base_filename}.zip",
                 'url': download_url,
                 'size_mb': size_mb
-            }], f"✅ Compresión completada: {size_mb:.1f}MB"
+            }], f"✅ Empaquetado completado: {size_mb:.1f}MB"
             
         except Exception as e:
             if os.path.exists(output_file):
                 os.remove(output_file)
             raise e
     
-    def _compress_split_optimized(self, user_id, user_dir, compress_dir, base_filename, split_size_mb):
-        """Compresión dividida optimizada"""
+    def _pack_split_simple(self, user_id, user_dir, packed_dir, base_filename, split_size_mb):
+        """Empaqueta y divide en partes SIN compresión"""
         split_size_bytes = min(split_size_mb, self.max_part_size_mb) * 1024 * 1024
         
         try:
-            # Primero comprimir con nivel bajo
-            temp_file = os.path.join(compress_dir, f"temp_{base_filename}.7z")
+            # Primero empaquetar todo en un ZIP temporal SIN compresión
+            temp_file = os.path.join(packed_dir, f"temp_{base_filename}.zip")
             
-            with py7zr.SevenZipFile(temp_file, 'w', compression_level=self.compression_level) as archive:
+            with zipfile.ZipFile(temp_file, 'w', compression=zipfile.ZIP_STORED) as zipf:
                 for file in os.listdir(user_dir):
                     file_path = os.path.join(user_dir, file)
                     if os.path.isfile(file_path):
-                        archive.write(file_path, file)
+                        zipf.write(file_path, file)
             
-            # Dividir el archivo comprimido
+            # Dividir el archivo empaquetado
             part_files = []
             part_num = 1
             
@@ -1198,17 +1203,17 @@ class OptimizedCompressionService:
                     if not chunk:
                         break
                     
-                    part_filename = f"{base_filename}.part{part_num:03d}.7z"
-                    part_path = os.path.join(compress_dir, part_filename)
+                    part_filename = f"{base_filename}.part{part_num:03d}.zip"
+                    part_path = os.path.join(packed_dir, part_filename)
                     
                     with open(part_path, 'wb') as part_file:
                         part_file.write(chunk)
                     
                     part_size = os.path.getsize(part_path)
-                    download_url = f"{RENDER_DOMAIN}/static/{user_id}/compressed/{part_filename}"
+                    download_url = file_service.create_packed_url(user_id, part_filename)
                     
                     # Registrar cada parte
-                    file_num = file_service.register_file(user_id, part_filename, part_filename, "compressed")
+                    file_num = file_service.register_file(user_id, part_filename, part_filename, "packed")
                     
                     part_files.append({
                         'number': file_num,
@@ -1222,46 +1227,46 @@ class OptimizedCompressionService:
             os.remove(temp_file)
             
             total_size = sum(part['size_mb'] for part in part_files)
-            return part_files, f"✅ Compresión completada: {len(part_files)} partes, {total_size:.1f}MB total"
+            return part_files, f"✅ Empaquetado completado: {len(part_files)} partes, {total_size:.1f}MB total"
             
         except Exception as e:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
             raise e
 
-    def clear_compressed_folder(self, user_id):
-        """Elimina todos los archivos comprimidos del usuario"""
+    def clear_packed_folder(self, user_id):
+        """Elimina todos los archivos empaquetados del usuario"""
         try:
-            compress_dir = os.path.join(BASE_DIR, str(user_id), "compressed")
+            packed_dir = os.path.join(BASE_DIR, str(user_id), "packed")
             
-            if not os.path.exists(compress_dir):
-                return False, "❌ No tienes archivos comprimidos para eliminar"
+            if not os.path.exists(packed_dir):
+                return False, "❌ No tienes archivos empaquetados para eliminar"
             
-            files = os.listdir(compress_dir)
+            files = os.listdir(packed_dir)
             if not files:
-                return False, "❌ No tienes archivos comprimidos para eliminar"
+                return False, "❌ No tienes archivos empaquetados para eliminar"
             
             deleted_count = 0
             for filename in files:
-                file_path = os.path.join(compress_dir, filename)
+                file_path = os.path.join(packed_dir, filename)
                 if os.path.isfile(file_path):
                     os.remove(file_path)
                     deleted_count += 1
             
-            # Limpiar metadata de comprimidos
-            user_key = f"{user_id}_compressed"
+            # Limpiar metadata de empaquetados
+            user_key = f"{user_id}_packed"
             if user_key in file_service.metadata:
                 file_service.metadata[user_key]["files"] = {}
                 file_service.save_metadata()
             
-            return True, f"✅ Se eliminaron {deleted_count} archivos comprimidos"
+            return True, f"✅ Se eliminaron {deleted_count} archivos empaquetados"
             
         except Exception as e:
-            logger.error(f"❌ Error limpiando carpeta comprimida: {e}")
+            logger.error(f"❌ Error limpiando carpeta empaquetada: {e}")
             return False, f"❌ Error al eliminar archivos: {str(e)}"
 
 # Reemplazar la instancia global
-compression_service = OptimizedCompressionService()
+packing_service = SimplePackingService()
 
 # ===== GESTIÓN DE CONVERSIONES ACTIVAS =====
 class ConversionManager:
@@ -1530,8 +1535,8 @@ async def start_command(client, message):
 `/start` - Mensaje de bienvenida
 `/files` - Ver tus archivos numerados
 `/status` - Ver tu estado y uso de almacenamiento
-`/compress` - Comprimir todos tus archivos
-`/compress [MB]` - Comprimir y dividir (ej: `/compress 10`)
+`/pack` - Empaquetar todos tus archivos en ZIP
+`/pack [MB]` - Empaquetar y dividir (ej: `/pack 100`)
 `/rename [número] [nuevo_nombre]` - Renombrar archivo
 `/convert [número]` - Convertir video a 320x240 MP4 (REAL)
 
@@ -1542,6 +1547,12 @@ async def start_command(client, message):
 • Modo optimizado para CPU limitada
 • Reducción real de tamaño
 • **Puedes cancelar en cualquier momento**
+
+📦 **Empaquetado Simple:**
+• Une todos tus archivos en un ZIP
+• **SIN COMPRESIÓN** (archivos mantienen tamaño original)
+• Ideal para descargar múltiples archivos juntos
+• División automática en partes si es muy grande
 
 📁 **¿Cómo Funciona?**
 1. Envíame cualquier archivo
@@ -1599,6 +1610,9 @@ async def files_command(client, message):
         # Agregar botón para eliminar todos
         keyboard_buttons.append([InlineKeyboardButton("🗑️ ELIMINAR TODOS LOS ARCHIVOS", callback_data="delete_all")])
         
+        # Agregar botón para empaquetar
+        keyboard_buttons.append([InlineKeyboardButton("📦 Empaquetar Archivos", callback_data="pack_files")])
+        
         # Agregar botón para abrir explorador web
         keyboard_buttons.append([InlineKeyboardButton("🌐 Abrir Explorador Web", url=f"{RENDER_DOMAIN}/files/{user_id}")])
         
@@ -1644,8 +1658,8 @@ async def status_command(client, message):
         logger.error(f"Error en /status: {e}")
         await message.reply_text("❌ **Error al obtener estado del sistema.**")
 
-async def compress_command(client, message):
-    """Maneja el comando /compress - AHORA CON VERIFICACIÓN DE CARGA"""
+async def pack_command(client, message):
+    """Maneja el comando /pack - EMPAQUETADO SIMPLE SIN COMPRESIÓN"""
     try:
         user_id = message.from_user.id
         command_parts = message.text.split()
@@ -1668,32 +1682,32 @@ async def compress_command(client, message):
                 if split_size <= 0:
                     await message.reply_text("❌ **El tamaño de división debe ser mayor a 0 MB**")
                     return
-                if split_size > 50:  # Reducido el límite máximo
-                    await message.reply_text("❌ **El tamaño máximo por parte es 50 MB**")
+                if split_size > 200:  # Límite aumentado para empaquetado
+                    await message.reply_text("❌ **El tamaño máximo por parte es 200 MB**")
                     return
             except ValueError:
-                await message.reply_text("❌ **Formato incorrecto.** Usa: `/compress` o `/compress 10`")
+                await message.reply_text("❌ **Formato incorrecto.** Usa: `/pack` o `/pack 100`")
                 return
         
         # Mensaje de inicio
         status_msg = await message.reply_text(
-            "🔄 **Iniciando proceso de compresión OPTIMIZADA...**\n\n"
-            "⏳ Esto puede tomar varios minutos...\n"
-            "💡 **Modo optimizado para CPU limitada**"
+            "📦 **Iniciando empaquetado SIMPLE (sin compresión)...**\n\n"
+            "⏳ Uniendo todos tus archivos en un ZIP...\n"
+            "💡 **Modo almacenamiento: SIN compresión**"
         )
         
-        # Ejecutar compresión optimizada
-        def run_optimized_compression():
+        # Ejecutar empaquetado simple
+        def run_simple_packing():
             try:
-                files, status_message = compression_service.compress_folder(user_id, split_size)
+                files, status_message = packing_service.pack_folder(user_id, split_size)
                 return files, status_message
             except Exception as e:
-                logger.error(f"Error en compresión optimizada: {e}")
-                return None, f"❌ **Error en compresión:** {str(e)}"
+                logger.error(f"Error en empaquetado simple: {e}")
+                return None, f"❌ **Error al empaquetar:** {str(e)}"
         
         # Ejecutar en thread
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(run_optimized_compression)
+            future = executor.submit(run_simple_packing)
             files, status_message = future.result(timeout=300)  # 5 minutos timeout
         
         if not files:
@@ -1704,17 +1718,20 @@ async def compress_command(client, message):
         if len(files) == 1:
             # Un solo archivo
             file_info = files[0]
-            response_text = f"""✅ **Compresión Completada Exitosamente**
+            response_text = f"""✅ **Empaquetado SIMPLE Completado Exitosamente**
 
 📦 **Archivo #{file_info['number']}:** `{file_info['filename']}`
-💾 **Tamaño Comprimido:** {file_info['size_mb']:.1f} MB
+💾 **Tamaño del Paquete:** {file_info['size_mb']:.1f} MB
+🔧 **Modo:** Almacenamiento SIN compresión
 
 🔗 **Enlace de Descarga:**
-📎 [{file_info['filename']}]({file_info['url']})"""
+📎 [{file_info['filename']}]({file_info['url']})
+
+💡 **Al descargar:** Descomprime el ZIP para obtener todos tus archivos originales"""
             
             # Agregar botón para limpiar
             clear_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🗑️ Vaciar Archivos Comprimidos", callback_data="clear_compressed")]
+                [InlineKeyboardButton("🗑️ Vaciar Archivos Empaquetados", callback_data="clear_packed")]
             ])
             
             await status_msg.edit_text(
@@ -1725,20 +1742,23 @@ async def compress_command(client, message):
             
         else:
             # Múltiples partes
-            response_text = f"""✅ **Compresión Completada Exitosamente**
+            response_text = f"""✅ **Empaquetado SIMPLE Completado Exitosamente**
 
 📦 **Archivos Generados:** {len(files)} partes
 💾 **Tamaño Total:** {sum(f['size_mb'] for f in files):.1f} MB
+🔧 **Modo:** Almacenamiento SIN compresión
 
 🔗 **Enlaces de Descarga:**\n"""
             
             for file_info in files:
                 response_text += f"\n**Parte {file_info['number']}:** 📎 [{file_info['filename']}]({file_info['url']})"
             
+            response_text += "\n\n💡 **Al descargar:** Descarga todas las partes y descomprime el ZIP para obtener todos tus archivos originales"
+            
             # Telegram limita a 4096 caracteres por mensaje
             if len(response_text) > 4000:
                 # Enviar mensajes divididos
-                await status_msg.edit_text("✅ **Compresión completada exitosamente**\n\n📦 **Los enlaces se enviarán en varios mensajes...**")
+                await status_msg.edit_text("✅ **Empaquetado completado exitosamente**\n\n📦 **Los enlaces se enviarán en varios mensajes...**")
                 
                 for file_info in files:
                     part_text = f"**Parte {file_info['number']}:** 📎 [{file_info['filename']}]({file_info['url']})"
@@ -1746,7 +1766,7 @@ async def compress_command(client, message):
                 
                 # Agregar botón para limpiar en un mensaje separado
                 clear_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🗑️ Vaciar Archivos Comprimidos", callback_data="clear_compressed")]
+                    [InlineKeyboardButton("🗑️ Vaciar Archivos Empaquetados", callback_data="clear_packed")]
                 ])
                 await message.reply_text(
                     "💡 **¿Quieres liberar espacio?**",
@@ -1755,7 +1775,7 @@ async def compress_command(client, message):
             else:
                 # Agregar botón para limpiar
                 clear_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🗑️ Vaciar Archivos Comprimidos", callback_data="clear_compressed")]
+                    [InlineKeyboardButton("🗑️ Vaciar Archivos Empaquetados", callback_data="clear_packed")]
                 ])
                 
                 await status_msg.edit_text(
@@ -1764,13 +1784,13 @@ async def compress_command(client, message):
                     reply_markup=clear_keyboard
                 )
                 
-        logger.info(f"✅ Compresión completada para usuario {user_id}: {len(files)} archivos")
+        logger.info(f"✅ Empaquetado completado para usuario {user_id}: {len(files)} archivos")
         
     except concurrent.futures.TimeoutError:
-        await status_msg.edit_text("❌ **La compresión tardó demasiado tiempo.** Intenta con menos archivos o tamaños más pequeños.")
+        await status_msg.edit_text("❌ **El empaquetado tardó demasiado tiempo.** Intenta con menos archivos.")
     except Exception as e:
-        logger.error(f"❌ Error en comando /compress: {e}")
-        await message.reply_text("❌ **Error en el proceso de compresión.** Por favor, intenta nuevamente.")
+        logger.error(f"❌ Error en comando /pack: {e}")
+        await message.reply_text("❌ **Error en el proceso de empaquetado.** Por favor, intenta nuevamente.")
 
 async def rename_command(client, message):
     """Maneja el comando /rename - AHORA CON NUEVO ENLACE"""
@@ -2263,6 +2283,150 @@ async def delete_file_callback(client, callback_query):
         logger.error(f"❌ Error eliminando archivo: {e}")
         await callback_query.answer("❌ Error eliminando archivo", show_alert=True)
 
+async def pack_files_callback(client, callback_query):
+    """Maneja el callback para empaquetar archivos"""
+    try:
+        user_id = callback_query.from_user.id
+        
+        # Mostrar opciones de empaquetado
+        pack_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📦 Empaquetar Todo", callback_data="pack_single"),
+                InlineKeyboardButton("📦 Dividir en Partes", callback_data="pack_split_options")
+            ],
+            [InlineKeyboardButton("❌ Cancelar", callback_data="cancel_pack")]
+        ])
+        
+        await callback_query.message.edit_text(
+            "📦 **Opciones de Empaquetado:**\n\n"
+            "• **Empaquetar Todo**: Crea un solo archivo ZIP\n"
+            "• **Dividir en Partes**: Divide en múltiples archivos ZIP\n\n"
+            "💡 **Modo SIN compresión**: Los archivos mantienen su tamaño original",
+            reply_markup=pack_keyboard
+        )
+        await callback_query.answer()
+        
+    except Exception as e:
+        logger.error(f"❌ Error en pack_files_callback: {e}")
+        await callback_query.answer("❌ Error", show_alert=True)
+
+async def pack_single_callback(client, callback_query):
+    """Maneja el callback para empaquetar en un solo archivo"""
+    try:
+        user_id = callback_query.from_user.id
+        
+        # Ejecutar empaquetado simple
+        await pack_command(client, callback_query.message)
+        await callback_query.answer()
+        
+    except Exception as e:
+        logger.error(f"❌ Error en pack_single_callback: {e}")
+        await callback_query.answer("❌ Error al empaquetar", show_alert=True)
+
+async def pack_split_options_callback(client, callback_query):
+    """Maneja el callback para mostrar opciones de división"""
+    try:
+        user_id = callback_query.from_user.id
+        
+        # Mostrar opciones de tamaño
+        split_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("50 MB", callback_data="pack_split_50"),
+                InlineKeyboardButton("100 MB", callback_data="pack_split_100")
+            ],
+            [
+                InlineKeyboardButton("150 MB", callback_data="pack_split_150"),
+                InlineKeyboardButton("200 MB", callback_data="pack_split_200")
+            ],
+            [InlineKeyboardButton("❌ Cancelar", callback_data="cancel_pack")]
+        ])
+        
+        await callback_query.message.edit_text(
+            "📦 **Selecciona el tamaño máximo por parte:**\n\n"
+            "💡 **Recomendado:** 100 MB para mejor compatibilidad",
+            reply_markup=split_keyboard
+        )
+        await callback_query.answer()
+        
+    except Exception as e:
+        logger.error(f"❌ Error en pack_split_options_callback: {e}")
+        await callback_query.answer("❌ Error", show_alert=True)
+
+async def pack_split_callback(client, callback_query):
+    """Maneja el callback para empaquetar con división"""
+    try:
+        user_id = callback_query.from_user.id
+        split_size = int(callback_query.data.replace("pack_split_", ""))
+        
+        # Crear mensaje simulado para el comando /pack
+        class MockMessage:
+            def __init__(self, user_id, split_size):
+                self.from_user = type('User', (), {'id': user_id})()
+                self.text = f"/pack {split_size}"
+        
+        mock_message = MockMessage(user_id, split_size)
+        await pack_command(client, mock_message)
+        await callback_query.answer()
+        
+    except Exception as e:
+        logger.error(f"❌ Error en pack_split_callback: {e}")
+        await callback_query.answer("❌ Error al empaquetar", show_alert=True)
+
+async def cancel_pack_callback(client, callback_query):
+    """Maneja la cancelación de empaquetado"""
+    try:
+        await callback_query.message.edit_text("❌ **Empaquetado cancelado.**")
+        await callback_query.answer("Operación cancelada")
+    except Exception as e:
+        logger.error(f"❌ Error en cancel_pack_callback: {e}")
+
+async def clear_packed_callback(client, callback_query):
+    """Maneja el callback para vaciar la carpeta empaquetada"""
+    try:
+        user_id = callback_query.from_user.id
+        
+        # Confirmación antes de eliminar
+        confirm_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Sí, eliminar todo", callback_data=f"confirm_clear_packed_{user_id}"),
+                InlineKeyboardButton("❌ Cancelar", callback_data="cancel_clear")
+            ]
+        ])
+        
+        await callback_query.message.edit_text(
+            "⚠️ **¿Estás seguro de que quieres eliminar TODOS tus archivos empaquetados?**\n\n"
+            "**Esta acción no se puede deshacer.**",
+            reply_markup=confirm_keyboard
+        )
+        await callback_query.answer()
+        
+    except Exception as e:
+        logger.error(f"❌ Error en clear_packed_callback: {e}")
+        await callback_query.answer("❌ Error", show_alert=True)
+
+async def confirm_clear_packed_callback(client, callback_query):
+    """Maneja la confirmación para vaciar la carpeta empaquetada"""
+    try:
+        data = callback_query.data.replace("confirm_clear_packed_", "")
+        user_id = int(data)
+        
+        if callback_query.from_user.id != user_id:
+            await callback_query.answer("❌ No puedes realizar esta acción", show_alert=True)
+            return
+        
+        success, message = packing_service.clear_packed_folder(user_id)
+        
+        if success:
+            await callback_query.message.edit_text(f"✅ **{message}**")
+        else:
+            await callback_query.message.edit_text(f"❌ **{message}**")
+            
+        await callback_query.answer()
+        
+    except Exception as e:
+        logger.error(f"❌ Error en confirm_clear_packed_callback: {e}")
+        await callback_query.answer("❌ Error al eliminar archivos", show_alert=True)
+
 async def stop_conversion_callback(client, callback_query):
     """Maneja el callback para detener una conversión"""
     try:
@@ -2298,57 +2462,10 @@ async def stop_conversion_callback(client, callback_query):
         logger.error(f"❌ Error en stop_conversion_callback: {e}")
         await callback_query.answer("❌ Error al cancelar la conversión", show_alert=True)
 
-async def clear_compressed_callback(client, callback_query):
-    """Maneja el callback para vaciar la carpeta comprimida"""
-    try:
-        user_id = callback_query.from_user.id
-        
-        # Confirmación antes de eliminar
-        confirm_keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Sí, eliminar todo", callback_data=f"confirm_clear_{user_id}"),
-                InlineKeyboardButton("❌ Cancelar", callback_data="cancel_clear")
-            ]
-        ])
-        
-        await callback_query.message.edit_text(
-            "⚠️ **¿Estás seguro de que quieres eliminar TODOS tus archivos comprimidos?**\n\n"
-            "**Esta acción no se puede deshacer.**",
-            reply_markup=confirm_keyboard
-        )
-        await callback_query.answer()
-        
-    except Exception as e:
-        logger.error(f"❌ Error en clear_compressed_callback: {e}")
-        await callback_query.answer("❌ Error", show_alert=True)
-
-async def confirm_clear_callback(client, callback_query):
-    """Maneja la confirmación para vaciar la carpeta comprimida"""
-    try:
-        data = callback_query.data.replace("confirm_clear_", "")
-        user_id = int(data)
-        
-        if callback_query.from_user.id != user_id:
-            await callback_query.answer("❌ No puedes realizar esta acción", show_alert=True)
-            return
-        
-        success, message = compression_service.clear_compressed_folder(user_id)
-        
-        if success:
-            await callback_query.message.edit_text(f"✅ **{message}**")
-        else:
-            await callback_query.message.edit_text(f"❌ **{message}**")
-            
-        await callback_query.answer()
-        
-    except Exception as e:
-        logger.error(f"❌ Error en confirm_clear_callback: {e}")
-        await callback_query.answer("❌ Error al eliminar archivos", show_alert=True)
-
 async def cancel_clear_callback(client, callback_query):
     """Maneja la cancelación de limpieza"""
     try:
-        await callback_query.message.edit_text("❌ **Operación cancelada.** Tus archivos comprimidos están seguros.")
+        await callback_query.message.edit_text("❌ **Operación cancelada.** Tus archivos empaquetados están seguros.")
         await callback_query.answer("Operación cancelada")
     except Exception as e:
         logger.error(f"❌ Error en cancel_clear_callback: {e}")
@@ -2365,7 +2482,7 @@ class TelegramBot:
         self.client.on_message(filters.command("start") & filters.private)(start_command)
         self.client.on_message(filters.command("files") & filters.private)(files_command)
         self.client.on_message(filters.command("status") & filters.private)(status_command)
-        self.client.on_message(filters.command("compress") & filters.private)(compress_command)
+        self.client.on_message(filters.command("pack") & filters.private)(pack_command)
         self.client.on_message(filters.command("rename") & filters.private)(rename_command)
         self.client.on_message(filters.command("convert") & filters.private)(convert_command)
         
@@ -2382,8 +2499,13 @@ class TelegramBot:
         self.client.on_callback_query(filters.regex(r"^confirm_delete_"))(delete_file_callback)
         self.client.on_callback_query(filters.regex("cancel_delete"))(delete_file_callback)
         self.client.on_callback_query(filters.regex(r"^stop_convert_"))(stop_conversion_callback)
-        self.client.on_callback_query(filters.regex("clear_compressed"))(clear_compressed_callback)
-        self.client.on_callback_query(filters.regex(r"^confirm_clear_"))(confirm_clear_callback)
+        self.client.on_callback_query(filters.regex("pack_files"))(pack_files_callback)
+        self.client.on_callback_query(filters.regex("pack_single"))(pack_single_callback)
+        self.client.on_callback_query(filters.regex("pack_split_options"))(pack_split_options_callback)
+        self.client.on_callback_query(filters.regex(r"^pack_split_"))(pack_split_callback)
+        self.client.on_callback_query(filters.regex("cancel_pack"))(cancel_pack_callback)
+        self.client.on_callback_query(filters.regex("clear_packed"))(clear_packed_callback)
+        self.client.on_callback_query(filters.regex(r"^confirm_clear_packed_"))(confirm_clear_packed_callback)
         self.client.on_callback_query(filters.regex("cancel_clear"))(cancel_clear_callback)
 
     async def start_bot(self):
