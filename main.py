@@ -1,4 +1,3 @@
-import psutil
 import os
 import logging
 import threading
@@ -14,6 +13,7 @@ import py7zr
 import json
 import shutil
 import subprocess
+import psutil
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -31,6 +31,14 @@ COMPRESSION_TIMEOUT = 600  # 10 minutos máximo
 MAX_CONCURRENT_PROCESSES = 1  # Solo 1 proceso pesado a la vez
 CPU_USAGE_LIMIT = 80  # Límite de uso de CPU
 
+# ===== LOGGING =====
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+
 # ===== SISTEMA DE GESTIÓN DE CARGA =====
 class LoadManager:
     def __init__(self):
@@ -42,7 +50,11 @@ class LoadManager:
         """Verifica si se puede iniciar un nuevo proceso pesado"""
         with self.lock:
             # Verificar uso actual de CPU
-            cpu_percent = psutil.cpu_percent(interval=1)
+            try:
+                cpu_percent = psutil.cpu_percent(interval=1)
+            except:
+                cpu_percent = 0
+            
             if cpu_percent > CPU_USAGE_LIMIT:
                 return False, f"❌ CPU sobrecargada ({cpu_percent:.1f}%). Espera un momento."
             
@@ -60,26 +72,24 @@ class LoadManager:
     def get_status(self):
         """Obtiene estado actual del sistema"""
         with self.lock:
-            cpu_percent = psutil.cpu_percent(interval=1)
-            memory = psutil.virtual_memory()
+            try:
+                cpu_percent = psutil.cpu_percent(interval=1)
+                memory = psutil.virtual_memory()
+                memory_percent = memory.percent
+            except:
+                cpu_percent = 0
+                memory_percent = 0
+            
             return {
                 'active_processes': self.active_processes,
                 'max_processes': self.max_processes,
                 'cpu_percent': cpu_percent,
-                'memory_percent': memory.percent,
+                'memory_percent': memory_percent,
                 'can_accept_work': self.active_processes < self.max_processes and cpu_percent < CPU_USAGE_LIMIT
             }
 
 # Instancia global del gestor de carga
 load_manager = LoadManager()
-
-# ===== LOGGING =====
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger(__name__)
 
 # ===== FLASK APP =====
 app = Flask(__name__)
@@ -299,9 +309,28 @@ def health():
         "timestamp": time.time()
     })
 
+@app.route('/system-status')
+def system_status():
+    """Endpoint para verificar el estado del sistema"""
+    status = load_manager.get_status()
+    return jsonify({
+        "status": "online",
+        "service": "nelson-file2link-optimized",
+        "system_load": status,
+        "timestamp": time.time(),
+        "optimized_for": "low-cpu-environment",
+        "max_concurrent_processes": MAX_CONCURRENT_PROCESSES
+    })
+
 @app.route('/static/<path:path>')
 def serve_static(path):
     return send_from_directory(BASE_DIR, path)
+
+@app.route('/static/<user_id>/download/<filename>')
+def serve_download(user_id, filename):
+    """Sirve archivos de descarga con nombre original"""
+    user_download_dir = os.path.join(BASE_DIR, user_id, "download")
+    return send_from_directory(user_download_dir, filename)
 
 @app.route('/static/<user_id>/compressed/<filename>')
 def serve_compressed(user_id, filename):
@@ -693,21 +722,8 @@ def file_explorer(user_id):
         </body>
         </html>
         """
-# ===== RUTA DE ESTADO DEL SISTEMA =====
-@app.route('/system-status')
-def system_status():
-    """Endpoint para verificar el estado del sistema"""
-    status = load_manager.get_status()
-    return jsonify({
-        "status": "online",
-        "service": "nelson-file2link-optimized",
-        "system_load": status,
-        "timestamp": time.time(),
-        "optimized_for": "low-cpu-environment",
-        "max_file_size_mb": 100,
-        "max_concurrent_processes": MAX_CONCURRENT_PROCESSES
-    })
-# ===== UTILIDADES DE ARCHIVOS =====
+
+# ===== UTILIDADES DE ARCHIVOS MEJORADAS =====
 class FileService:
     def __init__(self):
         self.file_mappings = {}
@@ -811,7 +827,7 @@ class FileService:
             del self.file_mappings[file_hash]
 
     def list_user_files(self, user_id):
-        """Lista archivos del usuario con numeración"""
+        """Lista archivos del usuario con numeración ACTUALIZADA"""
         user_dir = self.get_user_directory(user_id)
         if not os.path.exists(user_dir):
             return []
@@ -820,22 +836,24 @@ class FileService:
         user_key = f"{user_id}_download"
         
         if user_key in self.metadata:
-            # Ordenar por número
-            numbered_files = []
+            # Obtener archivos existentes y ordenar por número
+            existing_files = []
             for file_num, file_data in self.metadata[user_key]["files"].items():
                 file_path = os.path.join(user_dir, file_data["stored_name"])
                 if os.path.exists(file_path):
-                    numbered_files.append((int(file_num), file_data))
+                    existing_files.append((int(file_num), file_data))
             
-            numbered_files.sort(key=lambda x: x[0])
+            # Ordenar por número y reasignar números secuenciales
+            existing_files.sort(key=lambda x: x[0])
             
-            for file_num, file_data in numbered_files:
+            for new_number, (old_number, file_data) in enumerate(existing_files, 1):
                 file_path = os.path.join(user_dir, file_data["stored_name"])
                 if os.path.isfile(file_path):
                     size = os.path.getsize(file_path)
                     download_url = self.create_download_url(user_id, file_data["stored_name"])
                     files.append({
-                        'number': file_num,
+                        'number': new_number,  # Número secuencial actualizado
+                        'original_number': old_number,  # Número original para operaciones
                         'name': file_data["original_name"],
                         'stored_name': file_data["stored_name"],
                         'size': size,
@@ -861,12 +879,23 @@ class FileService:
         return file_num
 
     def get_file_by_number(self, user_id, file_number, file_type="download"):
-        """Obtiene información de archivo por número"""
+        """Obtiene información de archivo por número (usa números originales)"""
         user_key = f"{user_id}_{file_type}"
         if user_key not in self.metadata:
             return None
         
-        file_data = self.metadata[user_key]["files"].get(str(file_number))
+        # Buscar por número original en metadata
+        file_data = None
+        original_number = None
+        
+        # Primero obtener la lista actual para mapear números
+        files_list = self.list_user_files(user_id)
+        for file_info in files_list:
+            if file_info['number'] == file_number:
+                original_number = file_info['original_number']
+                file_data = self.metadata[user_key]["files"].get(str(original_number))
+                break
+        
         if not file_data:
             return None
         
@@ -879,7 +908,8 @@ class FileService:
         download_url = self.create_download_url(user_id, file_data["stored_name"])
         
         return {
-            'number': file_number,
+            'number': file_number,  # Número actual mostrado al usuario
+            'original_number': original_number,  # Número original en metadata
             'original_name': file_data["original_name"],
             'stored_name': file_data["stored_name"],
             'path': file_path,
@@ -893,9 +923,15 @@ class FileService:
             if user_key not in self.metadata:
                 return False, "Usuario no encontrado"
             
-            file_data = self.metadata[user_key]["files"].get(str(file_number))
-            if not file_data:
+            # Obtener información del archivo con mapeo de números
+            file_info = self.get_file_by_number(user_id, file_number, file_type)
+            if not file_info:
                 return False, "Archivo no encontrado"
+            
+            original_number = file_info['original_number']
+            file_data = self.metadata[user_key]["files"].get(str(original_number))
+            if not file_data:
+                return False, "Archivo no encontrado en metadata"
             
             # Sanitizar nuevo nombre
             new_name = self.sanitize_filename(new_name)
@@ -906,9 +942,19 @@ class FileService:
             if not os.path.exists(old_path):
                 return False, "Archivo físico no encontrado"
             
-            # Generar nuevo nombre almacenado
+            # Generar nuevo nombre almacenado (sin número al inicio)
             _, ext = os.path.splitext(file_data["stored_name"])
-            new_stored_name = f"{file_number:03d}_{new_name}{ext}"
+            new_stored_name = new_name + ext
+            
+            # Si ya existe un archivo con ese nombre, agregar sufijo
+            counter = 1
+            base_new_stored_name = new_stored_name
+            while os.path.exists(os.path.join(user_dir, new_stored_name)):
+                name_no_ext = os.path.splitext(base_new_stored_name)[0]
+                ext = os.path.splitext(base_new_stored_name)[1]
+                new_stored_name = f"{name_no_ext}_{counter}{ext}"
+                counter += 1
+            
             new_path = os.path.join(user_dir, new_stored_name)
             
             # Renombrar archivo físico
@@ -929,15 +975,21 @@ class FileService:
             return False, f"Error al renombrar: {str(e)}", None
 
     def delete_file_by_number(self, user_id, file_number, file_type="download"):
-        """Elimina un archivo por número"""
+        """Elimina un archivo por número (usa números mostrados)"""
         try:
             user_key = f"{user_id}_{file_type}"
             if user_key not in self.metadata:
                 return False, "Usuario no encontrado"
             
-            file_data = self.metadata[user_key]["files"].get(str(file_number))
-            if not file_data:
+            # Obtener información del archivo con mapeo de números
+            file_info = self.get_file_by_number(user_id, file_number, file_type)
+            if not file_info:
                 return False, "Archivo no encontrado"
+            
+            original_number = file_info['original_number']
+            file_data = self.metadata[user_key]["files"].get(str(original_number))
+            if not file_data:
+                return False, "Archivo no encontrado en metadata"
             
             user_dir = os.path.join(BASE_DIR, str(user_id), file_type)
             file_path = os.path.join(user_dir, file_data["stored_name"])
@@ -946,7 +998,7 @@ class FileService:
                 os.remove(file_path)
             
             # Eliminar de metadata
-            del self.metadata[user_key]["files"][str(file_number)]
+            del self.metadata[user_key]["files"][str(original_number)]
             self.save_metadata()
             
             return True, f"Archivo #{file_number} eliminado exitosamente"
@@ -978,6 +1030,7 @@ class FileService:
             user_key = f"{user_id}_{file_type}"
             if user_key in self.metadata:
                 self.metadata[user_key]["files"] = {}
+                self.metadata[user_key]["next_number"] = 1  # Reiniciar contador
                 self.save_metadata()
             
             return True, f"Se eliminaron {deleted_count} archivos"
@@ -1045,7 +1098,6 @@ class ProgressService:
 # Instancia global
 progress_service = ProgressService()
 
-# ===== SERVICIO DE COMPRESIÓN (SIN LÍMITE DE PARTES) =====
 # ===== COMPRESIÓN OPTIMIZADA =====
 class OptimizedCompressionService:
     def __init__(self):
@@ -1211,9 +1263,6 @@ class OptimizedCompressionService:
 # Reemplazar la instancia global
 compression_service = OptimizedCompressionService()
 
-# Instancia global
-compression_service = CompressionService()
-
 # ===== GESTIÓN DE CONVERSIONES ACTIVAS =====
 class ConversionManager:
     def __init__(self):
@@ -1261,7 +1310,6 @@ conversion_manager = ConversionManager()
 # ===== CONVERSIÓN DE VIDEO OPTIMIZADA =====
 class OptimizedVideoConversionService:
     def __init__(self):
-        self.max_video_size_mb = 25  # Reducido para menos procesamiento
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)  # Solo 1 conversión a la vez
         self.ffmpeg_preset = 'ultrafast'  # Más rápido, menos compresión
         self.ffmpeg_crf = '32'  # Calidad más baja para archivos más pequeños
@@ -1299,11 +1347,7 @@ class OptimizedVideoConversionService:
                 
                 logger.info(f"🎬 Iniciando conversión OPTIMIZADA: {file_info['original_name']} ({original_size_mb:.1f} MB)")
                 
-                # Para CPU limitada, solo convertir videos pequeños
-                if original_size_mb > 100:  # Límite de 100 MB
-                    return None, "❌ Video demasiado grande para conversión optimizada. Límite: 100MB"
-                
-                # Usar método optimizado para videos pequeños
+                # SIN LÍMITE DE TAMAÑO - convertir cualquier video
                 return self._convert_fast_single(user_id, file_info, original_path, original_size, progress_callback)
                     
             finally:
@@ -1327,11 +1371,22 @@ class OptimizedVideoConversionService:
             if conversion_manager.is_conversion_stopped(user_id, file_info['number']):
                 return None, "❌ Conversión cancelada por el usuario"
             
-            # Generar nombre para el archivo convertido
+            # Generar nombre para el archivo convertido (sin número al inicio)
             original_name_no_ext = os.path.splitext(file_info['original_name'])[0]
             converted_name = f"{original_name_no_ext}_converted.mp4"
-            converted_stored_name = f"{file_info['number']:03d}_{converted_name}"
-            converted_path = os.path.join(os.path.dirname(original_path), converted_stored_name)
+            converted_stored_name = converted_name  # Sin número al inicio
+            
+            # Si ya existe, agregar sufijo
+            counter = 1
+            base_converted_stored_name = converted_stored_name
+            user_dir = os.path.dirname(original_path)
+            while os.path.exists(os.path.join(user_dir, converted_stored_name)):
+                name_no_ext = os.path.splitext(base_converted_stored_name)[0]
+                ext = os.path.splitext(base_converted_stored_name)[1]
+                converted_stored_name = f"{name_no_ext}_{counter}{ext}"
+                counter += 1
+            
+            converted_path = os.path.join(user_dir, converted_stored_name)
             
             if progress_callback:
                 progress_callback(2, 3, "Ejecutando FFmpeg optimizado...")
@@ -1366,8 +1421,8 @@ class OptimizedVideoConversionService:
             except Exception as e:
                 logger.error(f"Error eliminando original: {e}")
             
-            # Actualizar metadata
-            file_service.metadata[f"{user_id}_download"]["files"][str(file_info['number'])] = {
+            # Actualizar metadata con nuevo nombre
+            file_service.metadata[f"{user_id}_download"]["files"][str(file_info['original_number'])] = {
                 "original_name": converted_name,
                 "stored_name": converted_stored_name,
                 "registered_at": time.time(),
@@ -1423,7 +1478,7 @@ class OptimizedVideoConversionService:
                 cmd, 
                 capture_output=True, 
                 text=True, 
-                timeout=300  # 5 minutos timeout (reducido)
+                timeout=600  # 10 minutos timeout para videos grandes
             )
             
             # Verificar si la conversión fue detenida durante la ejecución
@@ -1441,8 +1496,8 @@ class OptimizedVideoConversionService:
             return True, None
             
         except subprocess.TimeoutExpired:
-            logger.error("❌ FFmpeg timeout (5 minutos)")
-            return False, "La conversión tardó demasiado tiempo (más de 5 minutos)"
+            logger.error("❌ FFmpeg timeout (10 minutos)")
+            return False, "La conversión tardó demasiado tiempo (más de 10 minutos)"
         except Exception as e:
             logger.error(f"❌ Error ejecutando FFmpeg: {e}")
             return False, str(e)
@@ -1458,10 +1513,7 @@ class OptimizedVideoConversionService:
 # Reemplazar la instancia global
 video_service = OptimizedVideoConversionService()
 
-# Instancia global
-video_service = VideoConversionService()
-
-# ===== MANEJADORES DE COMANDOS =====
+# ===== MANEJADORES DE COMANDOS OPTIMIZADOS =====
 async def start_command(client, message):
     """Maneja el comando /start"""
     try:
@@ -1485,9 +1537,9 @@ async def start_command(client, message):
 
 🎬 **Conversión de Video:**
 {ffmpeg_status}
-• Conversión REAL a 320x240
-• Límite automático: 50 MB por parte
-• División y unión automática para videos grandes
+• Conversión RÁPIDA a 320x240
+• **SIN LÍMITES de tamaño**
+• Modo optimizado para CPU limitada
 • Reducción real de tamaño
 • **Puedes cancelar en cualquier momento**
 
@@ -1508,7 +1560,7 @@ async def start_command(client, message):
         logger.error(f"❌ Error en /start: {e}")
 
 async def files_command(client, message):
-    """Maneja el comando /files - AHORA CON ENLACES"""
+    """Maneja el comando /files - AHORA CON ENLACES Y NÚMEROS ACTUALIZADOS"""
     try:
         user_id = message.from_user.id
         files = file_service.list_user_files(user_id)
@@ -1720,6 +1772,54 @@ async def compress_command(client, message):
         logger.error(f"❌ Error en comando /compress: {e}")
         await message.reply_text("❌ **Error en el proceso de compresión.** Por favor, intenta nuevamente.")
 
+async def rename_command(client, message):
+    """Maneja el comando /rename - AHORA CON NUEVO ENLACE"""
+    try:
+        user_id = message.from_user.id
+        command_parts = message.text.split(maxsplit=2)
+        
+        if len(command_parts) < 3:
+            await message.reply_text("❌ **Formato incorrecto.** Usa: `/rename número nuevo_nombre`")
+            return
+        
+        try:
+            file_number = int(command_parts[1])
+        except ValueError:
+            await message.reply_text("❌ **El número debe ser un valor numérico válido.**")
+            return
+        
+        new_name = command_parts[2].strip()
+        
+        if not new_name:
+            await message.reply_text("❌ **El nuevo nombre no puede estar vacío.**")
+            return
+        
+        # Renombrar archivo
+        success, result_message, new_url = file_service.rename_file(user_id, file_number, new_name)
+        
+        if success:
+            response_text = f"✅ **{result_message}**\n\n"
+            response_text += f"🔗 **Nuevo enlace de descarga:**\n"
+            response_text += f"📎 [{new_name}]({new_url})"
+            
+            # Crear teclado con el nuevo enlace
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔗 Abrir Nuevo Enlace", url=new_url)],
+                [InlineKeyboardButton("📂 Ver Todos los Archivos", callback_data="files_list")]
+            ])
+            
+            await message.reply_text(
+                response_text,
+                disable_web_page_preview=True,
+                reply_markup=keyboard
+            )
+        else:
+            await message.reply_text(f"❌ **{result_message}**")
+            
+    except Exception as e:
+        logger.error(f"❌ Error en comando /rename: {e}")
+        await message.reply_text("❌ **Error al renombrar archivo.** Por favor, intenta nuevamente.")
+
 async def convert_command(client, message):
     """Maneja el comando /convert - AHORA CON VERIFICACIÓN DE CARGA"""
     try:
@@ -1756,19 +1856,7 @@ async def convert_command(client, message):
             )
             return
         
-        # Verificar tamaño del archivo
-        file_info = file_service.get_file_by_number(user_id, file_number)
-        if file_info:
-            file_size = os.path.getsize(file_info['path'])
-            file_size_mb = file_size / (1024 * 1024)
-            if file_size_mb > 100:  # Límite de 100 MB
-                await message.reply_text(
-                    f"❌ **Video demasiado grande para conversión optimizada.**\n\n"
-                    f"• Tamaño actual: {file_size_mb:.1f} MB\n"
-                    f"• Límite máximo: 100 MB\n"
-                    f"• **Sugerencia:** Comprime el video primero o divide en partes más pequeñas."
-                )
-                return
+        # SIN LÍMITE DE TAMAÑO - cualquier video puede convertirse
         
         # Registrar conversión activa
         conversion_key = conversion_manager.start_conversion(user_id, file_number, message.id)
@@ -1858,280 +1946,6 @@ async def convert_command(client, message):
         logger.error(f"❌ Error en comando /convert: {e}")
         await message.reply_text("❌ **Error al iniciar la conversión.** Por favor, intenta nuevamente.")
 
-async def compress_command(client, message):
-    """Maneja el comando /compress"""
-    try:
-        user_id = message.from_user.id
-        command_parts = message.text.split()
-        
-        split_size = None
-        if len(command_parts) > 1:
-            try:
-                split_size = int(command_parts[1])
-                if split_size <= 0:
-                    await message.reply_text("❌ **El tamaño de división debe ser mayor a 0 MB**")
-                    return
-                if split_size > 100:
-                    await message.reply_text("❌ **El tamaño máximo por parte es 100 MB**")
-                    return
-            except ValueError:
-                await message.reply_text("❌ **Formato incorrecto.** Usa: `/compress` o `/compress 10`")
-                return
-        
-        # Mensaje de inicio
-        status_msg = await message.reply_text("🔄 **Iniciando proceso de compresión...**\n\n⏳ Esto puede tomar varios minutos dependiendo del tamaño y cantidad de archivos...")
-        
-        # Ejecutar compresión en un hilo separado para no bloquear
-        def run_compression():
-            try:
-                files, status_message = compression_service.compress_folder(user_id, split_size)
-                return files, status_message
-            except Exception as e:
-                logger.error(f"Error en compresión: {e}")
-                return None, f"❌ **Error en compresión:** {str(e)}"
-        
-        # Ejecutar en thread para no bloquear
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(run_compression)
-            files, status_message = future.result(timeout=300)  # 5 minutos timeout
-        
-        if not files:
-            await status_msg.edit_text(status_message)
-            return
-        
-        # Crear mensaje con los enlaces
-        if len(files) == 1:
-            # Un solo archivo
-            file_info = files[0]
-            response_text = f"""✅ **Compresión Completada Exitosamente**
-
-📦 **Archivo #{file_info['number']}:** `{file_info['filename']}`
-💾 **Tamaño Comprimido:** {file_info['size_mb']:.1f} MB
-
-🔗 **Enlace de Descarga:**
-📎 [{file_info['filename']}]({file_info['url']})"""
-            
-            # Agregar botón para limpiar
-            clear_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🗑️ Vaciar Archivos Comprimidos", callback_data="clear_compressed")]
-            ])
-            
-            await status_msg.edit_text(
-                response_text, 
-                disable_web_page_preview=True,
-                reply_markup=clear_keyboard
-            )
-            
-        else:
-            # Múltiples partes
-            response_text = f"""✅ **Compresión Completada Exitosamente**
-
-📦 **Archivos Generados:** {len(files)} partes
-💾 **Tamaño Total:** {sum(f['size_mb'] for f in files):.1f} MB
-
-🔗 **Enlaces de Descarga:**\n"""
-            
-            for file_info in files:
-                response_text += f"\n**Parte {file_info['number']}:** 📎 [{file_info['filename']}]({file_info['url']})"
-            
-            # Telegram limita a 4096 caracteres por mensaje
-            if len(response_text) > 4000:
-                # Enviar mensajes divididos
-                await status_msg.edit_text("✅ **Compresión completada exitosamente**\n\n📦 **Los enlaces se enviarán en varios mensajes...**")
-                
-                for file_info in files:
-                    part_text = f"**Parte {file_info['number']}:** 📎 [{file_info['filename']}]({file_info['url']})"
-                    await message.reply_text(part_text, disable_web_page_preview=True)
-                
-                # Agregar botón para limpiar en un mensaje separado
-                clear_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🗑️ Vaciar Archivos Comprimidos", callback_data="clear_compressed")]
-                ])
-                await message.reply_text(
-                    "💡 **¿Quieres liberar espacio?**",
-                    reply_markup=clear_keyboard
-                )
-            else:
-                # Agregar botón para limpiar
-                clear_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🗑️ Vaciar Archivos Comprimidos", callback_data="clear_compressed")]
-                ])
-                
-                await status_msg.edit_text(
-                    response_text, 
-                    disable_web_page_preview=True,
-                    reply_markup=clear_keyboard
-                )
-                
-        logger.info(f"✅ Compresión completada para usuario {user_id}: {len(files)} archivos")
-        
-    except concurrent.futures.TimeoutError:
-        await status_msg.edit_text("❌ **La compresión tardó demasiado tiempo.** Intenta con menos archivos o tamaños más pequeños.")
-    except Exception as e:
-        logger.error(f"❌ Error en comando /compress: {e}")
-        await message.reply_text("❌ **Error en el proceso de compresión.** Por favor, intenta nuevamente.")
-
-async def rename_command(client, message):
-    """Maneja el comando /rename - AHORA CON NUEVO ENLACE"""
-    try:
-        user_id = message.from_user.id
-        command_parts = message.text.split(maxsplit=2)
-        
-        if len(command_parts) < 3:
-            await message.reply_text("❌ **Formato incorrecto.** Usa: `/rename número nuevo_nombre`")
-            return
-        
-        try:
-            file_number = int(command_parts[1])
-        except ValueError:
-            await message.reply_text("❌ **El número debe ser un valor numérico válido.**")
-            return
-        
-        new_name = command_parts[2].strip()
-        
-        if not new_name:
-            await message.reply_text("❌ **El nuevo nombre no puede estar vacío.**")
-            return
-        
-        # Renombrar archivo
-        success, result_message, new_url = file_service.rename_file(user_id, file_number, new_name)
-        
-        if success:
-            response_text = f"✅ **{result_message}**\n\n"
-            response_text += f"🔗 **Nuevo enlace de descarga:**\n"
-            response_text += f"📎 [{new_name}]({new_url})"
-            
-            # Crear teclado con el nuevo enlace
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔗 Abrir Nuevo Enlace", url=new_url)],
-                [InlineKeyboardButton("📂 Ver Todos los Archivos", callback_data="files_list")]
-            ])
-            
-            await message.reply_text(
-                response_text,
-                disable_web_page_preview=True,
-                reply_markup=keyboard
-            )
-        else:
-            await message.reply_text(f"❌ **{result_message}**")
-            
-    except Exception as e:
-        logger.error(f"❌ Error en comando /rename: {e}")
-        await message.reply_text("❌ **Error al renombrar archivo.** Por favor, intenta nuevamente.")
-
-async def convert_command(client, message):
-    """Maneja el comando /convert - VERSIÓN CORREGIDA SIN BLOQUEO"""
-    try:
-        user_id = message.from_user.id
-        command_parts = message.text.split()
-        
-        if len(command_parts) < 2:
-            await message.reply_text("❌ **Formato incorrecto.** Usa: `/convert número`")
-            return
-        
-        try:
-            file_number = int(command_parts[1])
-        except ValueError:
-            await message.reply_text("❌ **El número debe ser un valor numérico válido.**")
-            return
-        
-        # Verificar si FFmpeg está disponible
-        if not video_service._check_ffmpeg():
-            await message.reply_text(
-                "❌ **FFmpeg no está disponible en este servidor.**\n\n"
-                "La conversión REAL de videos no puede realizarse en este momento. "
-                "Contacta al administrador del sistema para instalar FFmpeg."
-            )
-            return
-        
-        # Registrar conversión activa
-        conversion_key = conversion_manager.start_conversion(user_id, file_number, message.id)
-        
-        # Mensaje de inicio con botón de cancelar
-        cancel_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏹️ Cancelar Conversión", callback_data=f"stop_convert_{user_id}_{file_number}")]
-        ])
-        
-        status_msg = await message.reply_text(
-            "🔄 **Iniciando conversión REAL con FFmpeg...**\n\n"
-            "⏳ **Este proceso puede tomar varios minutos...**\n"
-            "📊 **Progreso:** `[░░░░░░░░░░░░░░░] 0.0%`\n\n"
-            "💡 **Puedes cancelar en cualquier momento**",
-            reply_markup=cancel_keyboard
-        )
-        
-        # Función para ejecutar la conversión en un hilo separado
-        async def run_conversion_async():
-            try:
-                # Variables para progreso
-                current_progress = {"step": 0, "total_steps": 3, "part": 0, "total_parts": 1}
-                
-                def progress_callback(current, total, message_text=""):
-                    """Callback para actualizar progreso (se ejecuta en el hilo de conversión)"""
-                    current_progress["step"] = current
-                    current_progress["total_steps"] = total
-                    
-                    # Usar asyncio para actualizar el mensaje de Telegram
-                    asyncio.run_coroutine_threadsafe(
-                        update_progress_message(current, total, current_progress),
-                        client.loop
-                    )
-                
-                # Ejecutar conversión en el ThreadPoolExecutor
-                loop = asyncio.get_event_loop()
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = loop.run_in_executor(
-                        executor, 
-                        lambda: video_service.convert_video(user_id, file_number, progress_callback)
-                    )
-                    result, status_message = await asyncio.wait_for(future, timeout=1800)  # 30 minutos timeout
-                
-                return result, status_message
-                
-            except asyncio.TimeoutError:
-                return None, "❌ **La conversión tardó demasiado tiempo (más de 30 minutos).**"
-            except Exception as e:
-                logger.error(f"Error en conversión async: {e}")
-                return None, f"❌ **Error en conversión:** {str(e)}"
-        
-        async def update_progress_message(current, total, progress_data):
-            """Actualiza el mensaje de progreso en Telegram"""
-            try:
-                # Verificar si la conversión fue cancelada
-                if conversion_manager.is_conversion_stopped(user_id, file_number):
-                    return
-                    
-                progress_text = progress_service.create_conversion_progress(
-                    filename="Procesando video...",
-                    current_part=progress_data["part"],
-                    total_parts=progress_data["total_parts"],
-                    current_step=current,
-                    total_steps=total,
-                    process_type="Conversión de Video"
-                )
-                
-                # Mantener el botón de cancelar
-                updated_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⏹️ Cancelar Conversión", callback_data=f"stop_convert_{user_id}_{file_number}")]
-                ])
-                
-                await status_msg.edit_text(
-                    f"{progress_text}\n\n💡 **Puedes cancelar en cualquier momento**",
-                    reply_markup=updated_keyboard
-                )
-            except Exception as e:
-                logger.error(f"Error actualizando progreso: {e}")
-        
-        # Ejecutar la conversión en segundo plano sin bloquear
-        asyncio.create_task(execute_conversion(user_id, file_number, status_msg, run_conversion_async))
-        
-        logger.info(f"🎬 Conversión iniciada para usuario {user_id}, archivo {file_number}")
-        
-    except Exception as e:
-        conversion_manager.remove_conversion(user_id, file_number)
-        logger.error(f"❌ Error en comando /convert: {e}")
-        await message.reply_text("❌ **Error al iniciar la conversión.** Por favor, intenta nuevamente.")
-
 async def execute_conversion(user_id, file_number, status_msg, conversion_task):
     """Ejecuta la conversión y maneja el resultado"""
     try:
@@ -2152,7 +1966,7 @@ async def execute_conversion(user_id, file_number, status_msg, conversion_task):
         # Mostrar resultados de la conversión REAL
         parts_info = f" ({result['parts']} partes)" if result.get('parts', 1) > 1 else ""
         
-        response_text = f"""✅ **Conversión REAL Completada Exitosamente{parts_info}**
+        response_text = f"""✅ **Conversión RÁPIDA Completada Exitosamente{parts_info}**
 
 📹 **Video Original:** `{result['original_name']}`
 🎬 **Video Convertido:** `{result['converted_name']}`
@@ -2166,7 +1980,7 @@ async def execute_conversion(user_id, file_number, status_msg, conversion_task):
 🔗 **Enlace de Descarga:**
 📎 [{result['converted_name']}]({result['download_url']})
 
-⚡ **Tecnología:** Conversión REAL con FFmpeg"""
+⚡ **Tecnología:** Conversión RÁPIDA con FFmpeg (Modo Optimizado)"""
 
         # Crear teclado con enlace de descarga
         download_keyboard = InlineKeyboardMarkup([
@@ -2180,16 +1994,16 @@ async def execute_conversion(user_id, file_number, status_msg, conversion_task):
             reply_markup=download_keyboard
         )
         
-        logger.info(f"✅ Conversión REAL completada para usuario {user_id}, archivo {file_number}")
+        logger.info(f"✅ Conversión RÁPIDA completada para usuario {user_id}, archivo {file_number}")
         
     except Exception as e:
         conversion_manager.remove_conversion(user_id, file_number)
         logger.error(f"❌ Error en execute_conversion: {e}")
         await status_msg.edit_text("❌ **Error en el proceso de conversión.**")
 
-# ===== MANEJADOR DE ARCHIVOS =====
+# ===== MANEJADOR DE ARCHIVOS MEJORADO =====
 async def handle_file(client, message):
-    """Maneja la recepción de archivos"""
+    """Maneja la recepción de archivos - AHORA CON NOMBRES ORIGINALES"""
     try:
         user = message.from_user
         user_id = user.id
@@ -2225,16 +2039,17 @@ async def handle_file(client, message):
         sanitized_name = file_service.sanitize_filename(original_filename)
         file_number = file_service.get_next_file_number(user_id)
         
-        # Crear nombre almacenado con número
-        _, ext = os.path.splitext(sanitized_name)
-        stored_filename = f"{file_number:03d}_{sanitized_name}"
-        file_path = os.path.join(user_dir, stored_filename)
-
-        # Evitar sobreescritura
+        # Crear nombre almacenado SIN NÚMERO al inicio
+        stored_filename = sanitized_name
+        
+        # Si ya existe un archivo con ese nombre, agregar sufijo
         counter = 1
-        original_name_no_ext = os.path.splitext(sanitized_name)[0]
+        base_stored_filename = stored_filename
+        file_path = os.path.join(user_dir, stored_filename)
         while os.path.exists(file_path):
-            stored_filename = f"{file_number:03d}_{original_name_no_ext}_{counter}{ext}"
+            name_no_ext = os.path.splitext(base_stored_filename)[0]
+            ext = os.path.splitext(base_stored_filename)[1]
+            stored_filename = f"{name_no_ext}_{counter}{ext}"
             file_path = os.path.join(user_dir, stored_filename)
             counter += 1
 
@@ -2309,7 +2124,15 @@ async def handle_file(client, message):
         # Generar enlace seguro
         download_url = file_service.create_download_url(user_id, stored_filename)
 
-        success_text = f"""✅ **¡Archivo #{file_number} Almacenado Exitosamente!**
+        # Obtener el número actualizado de la lista
+        files_list = file_service.list_user_files(user_id)
+        current_file_number = None
+        for file_info in files_list:
+            if file_info['stored_name'] == stored_filename:
+                current_file_number = file_info['number']
+                break
+
+        success_text = f"""✅ **¡Archivo #{current_file_number} Almacenado Exitosamente!**
 
 📄 **Nombre:** `{original_filename}`
 📦 **Tipo:** {file_type}
@@ -2349,7 +2172,7 @@ async def handle_file(client, message):
         except:
             pass
 
-# ===== MANEJADORES DE CALLBACKS =====
+# ===== MANEJADORES DE CALLBACKS ACTUALIZADOS =====
 async def files_callback(client, callback_query):
     """Maneja el callback de listar archivos"""
     try:
@@ -2375,7 +2198,7 @@ async def files_callback(client, callback_query):
         await callback_query.answer("❌ Error", show_alert=True)
 
 async def delete_file_callback(client, callback_query):
-    """Maneja el callback de eliminar archivos individuales"""
+    """Maneja el callback de eliminar archivos individuales - AHORA CON NÚMEROS ACTUALIZADOS"""
     try:
         data = callback_query.data
         
@@ -2400,6 +2223,12 @@ async def delete_file_callback(client, callback_query):
             
             user_id = callback_query.from_user.id
             
+            # Obtener información del archivo antes de eliminar
+            file_info = file_service.get_file_by_number(user_id, file_number)
+            if not file_info:
+                await callback_query.answer("❌ Archivo no encontrado", show_alert=True)
+                return
+            
             # Confirmar eliminación
             confirm_keyboard = InlineKeyboardMarkup([
                 [
@@ -2408,16 +2237,12 @@ async def delete_file_callback(client, callback_query):
                 ]
             ])
             
-            file_info = file_service.get_file_by_number(user_id, file_number)
-            if file_info:
-                await callback_query.message.edit_text(
-                    f"⚠️ **¿Estás seguro de que quieres eliminar el archivo #{file_number}?**\n\n"
-                    f"📄 **Archivo:** `{file_info['original_name']}`\n\n"
-                    f"**Esta acción no se puede deshacer.**",
-                    reply_markup=confirm_keyboard
-                )
-            else:
-                await callback_query.answer("❌ Archivo no encontrado", show_alert=True)
+            await callback_query.message.edit_text(
+                f"⚠️ **¿Estás seguro de que quieres eliminar el archivo #{file_number}?**\n\n"
+                f"📄 **Archivo:** `{file_info['original_name']}`\n\n"
+                f"**Esta acción no se puede deshacer.**",
+                reply_markup=confirm_keyboard
+            )
             
         elif data.startswith("confirm_delete_"):
             file_number = int(data.replace("confirm_delete_", ""))
