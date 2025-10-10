@@ -725,19 +725,39 @@ class SimplePackingService:
             return None, f"Error al empaquetar: {str(e)}"
     
     def _pack_single_simple(self, user_id, user_dir, packed_dir, base_filename):
-        """Empaqueta en un solo archivo ZIP SIN compresión"""
+        """Empaqueta en un solo archivo ZIP SIN compresión - CORREGIDO"""
         output_file = os.path.join(packed_dir, f"{base_filename}.zip")
         
         try:
+            # Obtener lista completa de archivos
+            all_files = []
+            total_files = 0
+            
+            for filename in os.listdir(user_dir):
+                file_path = os.path.join(user_dir, filename)
+                if os.path.isfile(file_path):
+                    all_files.append((filename, file_path))
+                    total_files += 1
+            
+            if total_files == 0:
+                return None, "No se encontraron archivos para empaquetar"
+            
+            logger.info(f"Empaquetando {total_files} archivos en {output_file}")
+            
+            # Crear ZIP con todos los archivos
             with zipfile.ZipFile(output_file, 'w', compression=zipfile.ZIP_STORED) as zipf:
-                for file in os.listdir(user_dir):
-                    file_path = os.path.join(user_dir, file)
-                    if os.path.isfile(file_path):
-                        zipf.write(file_path, file)
+                for filename, file_path in all_files:
+                    try:
+                        zipf.write(file_path, filename)
+                        logger.info(f"Agregado al ZIP: {filename}")
+                    except Exception as e:
+                        logger.error(f"Error agregando {filename} al ZIP: {e}")
+                        continue
             
             file_size = os.path.getsize(output_file)
             size_mb = file_size / (1024 * 1024)
             
+            # Registrar archivo empaquetado
             file_num = file_service.register_file(user_id, f"{base_filename}.zip", f"{base_filename}.zip", "packed")
             
             download_url = file_service.create_packed_url(user_id, f"{base_filename}.zip")
@@ -746,29 +766,53 @@ class SimplePackingService:
                 'number': file_num,
                 'filename': f"{base_filename}.zip",
                 'url': download_url,
-                'size_mb': size_mb
-            }], f"Empaquetado completado: {size_mb:.1f}MB"
+                'size_mb': size_mb,
+                'total_files': total_files
+            }], f"Empaquetado completado: {total_files} archivos, {size_mb:.1f}MB"
             
         except Exception as e:
             if os.path.exists(output_file):
                 os.remove(output_file)
+            logger.error(f"Error en _pack_single_simple: {e}")
             raise e
     
     def _pack_split_simple(self, user_id, user_dir, packed_dir, base_filename, split_size_mb):
-        """Empaqueta y divide en partes SIN compresión"""
+        """Empaqueta y divide en partes SIN compresión - CORREGIDO"""
         split_size_bytes = min(split_size_mb, self.max_part_size_mb) * 1024 * 1024
         
         try:
+            # Obtener lista completa de archivos
+            all_files = []
+            total_files = 0
+            
+            for filename in os.listdir(user_dir):
+                file_path = os.path.join(user_dir, filename)
+                if os.path.isfile(file_path):
+                    all_files.append((filename, file_path))
+                    total_files += 1
+            
+            if total_files == 0:
+                return None, "No se encontraron archivos para empaquetar"
+            
+            # Primero empaquetar todo en un ZIP temporal SIN compresión
             temp_file = os.path.join(packed_dir, f"temp_{base_filename}.zip")
             
-            with zipfile.ZipFile(temp_file, 'w', compression=zipfile.ZIP_STORED) as zipf:
-                for file in os.listdir(user_dir):
-                    file_path = os.path.join(user_dir, file)
-                    if os.path.isfile(file_path):
-                        zipf.write(file_path, file)
+            logger.info(f"Creando archivo temporal con {total_files} archivos")
             
+            with zipfile.ZipFile(temp_file, 'w', compression=zipfile.ZIP_STORED) as zipf:
+                for filename, file_path in all_files:
+                    try:
+                        zipf.write(file_path, filename)
+                        logger.info(f"Agregado al ZIP temporal: {filename}")
+                    except Exception as e:
+                        logger.error(f"Error agregando {filename} al ZIP temporal: {e}")
+                        continue
+            
+            # Dividir el archivo empaquetado
             part_files = []
             part_num = 1
+            
+            logger.info(f"Dividiendo archivo temporal en partes de {split_size_mb}MB")
             
             with open(temp_file, 'rb') as f:
                 while True:
@@ -785,6 +829,7 @@ class SimplePackingService:
                     part_size = os.path.getsize(part_path)
                     download_url = file_service.create_packed_url(user_id, part_filename)
                     
+                    # Registrar cada parte
                     file_num = file_service.register_file(user_id, part_filename, part_filename, "packed")
                     
                     part_files.append({
@@ -794,16 +839,18 @@ class SimplePackingService:
                         'size_mb': part_size / (1024 * 1024)
                     })
                     
+                    logger.info(f"Creada parte {part_num}: {part_filename} ({part_size/(1024*1024):.1f}MB)")
                     part_num += 1
             
             os.remove(temp_file)
             
             total_size = sum(part['size_mb'] for part in part_files)
-            return part_files, f"Empaquetado completado: {len(part_files)} partes, {total_size:.1f}MB total"
+            return part_files, f"Empaquetado completado: {len(part_files)} partes, {total_files} archivos, {total_size:.1f}MB total"
             
         except Exception as e:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
+            logger.error(f"Error en _pack_split_simple: {e}")
             raise e
 
     def clear_packed_folder(self, user_id):
@@ -1025,7 +1072,9 @@ async def pack_command(client, message):
         
         if len(files) == 1:
             file_info = files[0]
-            response_text = f"""**Empaquetado Completado**
+            total_files_info = f" ({file_info['total_files']} archivos)" if 'total_files' in file_info else ""
+            
+            response_text = f"""**Empaquetado Completado{total_files_info}**
 
 **Archivo #{file_info['number']}:** `{file_info['filename']}`
 **Tamaño:** {file_info['size_mb']:.1f} MB
@@ -1046,7 +1095,15 @@ async def pack_command(client, message):
             )
             
         else:
-            response_text = f"""**Empaquetado Completado**
+            total_files = 0
+            for file_info in files:
+                if 'total_files' in file_info:
+                    total_files = file_info['total_files']
+                    break
+            
+            total_files_info = f" ({total_files} archivos)" if total_files > 0 else ""
+            
+            response_text = f"""**Empaquetado Completado{total_files_info}**
 
 **Archivos Generados:** {len(files)} partes
 **Tamaño Total:** {sum(f['size_mb'] for f in files):.1f} MB
