@@ -324,31 +324,47 @@ async def handle_file(client, message):
         user = message.from_user
         user_id = user.id
 
-        logger.info(f"Archivo recibido de {user_id}")
+        logger.info(f"Archivo recibido de {user_id}. Tipo de mensaje: {message.media}")
+        logger.debug(f"Objeto message completo: {message}")
 
         user_dir = file_service.get_user_directory(user_id)
+
+        file_obj = None
+        file_type = None
+        original_filename = None
+        file_size = 0
 
         if message.document:
             file_obj = message.document
             file_type = "documento"
             original_filename = message.document.file_name or "archivo"
             file_size = file_obj.file_size
+            logger.info(f"Detectado documento: {original_filename}, tamaño: {file_size}")
         elif message.video:
             file_obj = message.video
             file_type = "video"
             original_filename = message.video.file_name or "video.mp4"
             file_size = file_obj.file_size
+            logger.info(f"Detectado video: {original_filename}, tamaño: {file_size}")
         elif message.audio:
             file_obj = message.audio
             file_type = "audio"
             original_filename = message.audio.file_name or "audio.mp3"
             file_size = file_obj.file_size
+            logger.info(f"Detectado audio: {original_filename}, tamaño: {file_size}")
         elif message.photo:
             file_obj = message.photo[-1] # Obtener la foto de mayor resolución
             file_type = "foto"
             original_filename = f"foto_{file_obj.file_id}.jpg"
             file_size = file_obj.file_size
+            logger.info(f"Detectada foto: {original_filename}, tamaño: {file_size}")
         else:
+            logger.warning(f"Mensaje no contiene un tipo de archivo manejable: {message}")
+            return
+
+        if not file_obj:
+            logger.error(f"No se pudo obtener el objeto de archivo para el mensaje: {message}")
+            await message.reply_text("Error: No se pudo identificar el archivo en el mensaje.")
             return
 
         sanitized_name = file_service.sanitize_filename(original_filename)
@@ -461,7 +477,7 @@ async def handle_file(client, message):
         logger.info(f"Archivo guardado: {stored_filename} para usuario {user_id}")
 
     except Exception as e:
-        logger.error(f"Error procesando archivo: {e}")
+        logger.error(f"Error procesando archivo: {e}", exc_info=True)
         try:
             await message.reply_text("Error al procesar el archivo.")
         except:
