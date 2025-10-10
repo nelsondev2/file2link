@@ -344,9 +344,9 @@ async def handle_file(client, message):
             original_filename = message.audio.file_name or "audio.mp3"
             file_size = file_obj.file_size
         elif message.photo:
-            file_obj = message.photo
+            file_obj = message.photo[-1] # Obtener la foto de mayor resolución
             file_type = "foto"
-            original_filename = f"foto_{message.id}.jpg"
+            original_filename = f"foto_{file_obj.file_id}.jpg"
             file_size = file_obj.file_size
         else:
             return
