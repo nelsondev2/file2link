@@ -152,12 +152,10 @@ async def pack_command(client, message):
         system_status = load_manager.get_status()
         if not system_status['can_accept_work']:
             await message.reply_text(
-                f"**Sistema sobrecargado.**\n\n"
-                f"CPU: {system_status['cpu_percent']:.1f}%
-"
-                f"Procesos activos: {system_status['active_processes']}
-"
-                f"Intenta nuevamente en unos minutos."
+                f"""**Sistema sobrecargado.**\n\n"""
+                f"""CPU: {system_status['cpu_percent']:.1f}%\n"""
+                f"""Procesos activos: {system_status['active_processes']}\n"""
+                f"""Intenta nuevamente en unos minutos."""
             )
             return
         
