@@ -133,6 +133,7 @@ async def dir_command(client, message):
         logger.error(f"Error en /dir: {e}")
         await message.reply_text("Error al obtener ruta actual.")
 
+
 async def list_command(client, message):
     """Maneja el comando /list para listar archivos"""
     try:
@@ -144,23 +145,7 @@ async def list_command(client, message):
         if current_dir == 'download':
             files = file_service.list_user_files(user_id)
         else:
-            # Listar archivos empaquetados
-            packed_dir = os.path.join("static", str(user_id), "packed")
-            files = []
-            
-            if os.path.exists(packed_dir):
-                file_list = os.listdir(packed_dir)
-                for i, filename in enumerate(file_list, 1):
-                    file_path = os.path.join(packed_dir, filename)
-                    if os.path.isfile(file_path):
-                        size = os.path.getsize(file_path)
-                        download_url = file_service.create_packed_url(user_id, filename)
-                        files.append({
-                            'number': i,
-                            'name': filename,
-                            'size_mb': size / (1024 * 1024),
-                            'url': download_url
-                        })
+            files = file_service.list_packed_files(user_id)
         
         if not files:
             await message.reply_text(
