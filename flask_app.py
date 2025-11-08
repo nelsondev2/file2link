@@ -190,6 +190,12 @@ def home():
                     <h4>Empaquetado Simple</h4>
                     <p>Une todos tus archivos en un ZIP sin compresión</p>
                 </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🎬</div>
+                    <h4>Descargas YouTube</h4>
+                    <p>Descarga videos de YouTube directamente a tu carpeta</p>
+                </div>
             </div>
 
             <div class="info-section">
@@ -200,7 +206,10 @@ def home():
                 <p>4. Gestiona tus archivos fácilmente desde cualquier dispositivo</p>
 
                 <h3>🔗 Ejemplo de enlace:</h3>
-                <div class="code">https://nelson-file2link.onrender.com/static/123456/download/mi_archivo.pdf</div>
+                <div class="code">https://nelson-file2link.onrender.com/static/123456/downloads/mi_archivo.pdf</div>
+                
+                <h3>🎬 Comando YouTube:</h3>
+                <div class="code">/yt https://www.youtube.com/watch?v=ABCD1234</div>
             </div>
         </div>
     </body>
@@ -233,10 +242,10 @@ def system_status():
 def serve_static(path):
     return send_from_directory(BASE_DIR, path)
 
-@app.route('/static/<user_id>/download/<filename>')
+@app.route('/static/<user_id>/downloads/<filename>')  # CORREGIDO: downloads en lugar de download
 def serve_download(user_id, filename):
-    """Sirve archivos de descarga con nombre original"""
-    user_download_dir = os.path.join(BASE_DIR, user_id, "download")
+    """Sirve archivos de descarga con nombre original - RUTA CORREGIDA"""
+    user_download_dir = os.path.join(BASE_DIR, user_id, "downloads")  # CORREGIDO: downloads en lugar de download
     return send_from_directory(user_download_dir, filename)
 
 @app.route('/static/<user_id>/packed/<filename>')
