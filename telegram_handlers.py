@@ -13,6 +13,9 @@ from packing_service import packing_service
 
 logger = logging.getLogger(__name__)
 
+# Variable global para almacenar la carpeta actual por usuario
+user_current_dirs = {}
+
 async def start_command(client, message):
     """Maneja el comando /start"""
     try:
@@ -25,11 +28,12 @@ async def start_command(client, message):
 **Comandos Disponibles:**
 `/start` - Mensaje de bienvenida
 `/help` - Ayuda y comandos disponibles
-`/files` - Ver tus archivos numerados
-`/status` - Ver tu estado y uso
-`/pack` - Empaquetar todos tus archivos
-`/pack [MB]` - Empaquetar y dividir (ej: `/pack 100`)
-`/rename [número] [nuevo_nombre]` - Renombrar archivo
+`/cd` - Cambiar a carpeta (download o packed)
+`/dir` - Ver ruta actual
+`/list` - Listar archivos en carpeta actual
+`/pack` - Empaquetar archivos en download
+`/rename` - Renombrar archivo
+`/delete` - Eliminar archivo o todos
 
 **¿Cómo Funciona?**
 1. Envíame cualquier archivo
@@ -50,13 +54,19 @@ async def help_command(client, message):
     try:
         help_text = """📚 **Ayuda - Comandos Disponibles**
 
+**Navegación:**
+`/cd download` - Ir a carpeta de descargas
+`/cd packed` - Ir a carpeta empaquetados
+`/dir` - Ver ruta actual
+`/list` - Listar archivos en carpeta actual
+
 **Gestión de Archivos:**
-`/files` - Ver todos tus archivos con números
-`/status` - Ver tu uso de almacenamiento
-`/rename N NUEVO_NOMBRE` - Renombrar archivo
+`/delete` - Eliminar TODOS los archivos
+`/delete número` - Eliminar archivo específico
+`/rename número nuevo_nombre` - Renombrar archivo
 
 **Empaquetado:**
-`/pack` - Crear ZIP de todos los archivos
+`/pack` - Crear ZIP de todos los archivos en download
 `/pack MB` - Dividir en partes de MB especificados
 
 **Información:**
@@ -65,56 +75,115 @@ async def help_command(client, message):
 
 **Uso Básico:**
 1. Envía archivos al bot
-2. Usa `/files` para ver la lista
-3. Usa los números para gestionar archivos
-4. Usa `/pack` para empaquetar todo"""
+2. Usa `/cd download` para ir a descargas
+3. Usa `/list` para ver archivos
+4. Usa números para gestionar archivos"""
 
         await message.reply_text(help_text)
 
     except Exception as e:
         logger.error(f"Error en /help: {e}")
 
-async def files_command(client, message):
-    """Maneja el comando /files"""
+async def cd_command(client, message):
+    """Maneja el comando /cd para cambiar de carpeta"""
     try:
         user_id = message.from_user.id
-        files = file_service.list_user_files(user_id)
+        command_parts = message.text.split()
         
-        if not files:
+        if len(command_parts) < 2:
             await message.reply_text(
-                "No tienes archivos almacenados.\n\n"
-                "¡Envía tu primer archivo para comenzar!"
+                "**Uso:** `/cd carpeta`\n\n"
+                "**Carpetas disponibles:**\n"
+                "• `download` - Archivos descargados\n"
+                "• `packed` - Archivos empaquetados"
             )
             return
         
-        files_text = f"**Tus Archivos ({len(files)}):**\n\n"
+        folder = command_parts[1].lower()
+        
+        if folder not in ['download', 'packed']:
+            await message.reply_text(
+                "**Carpeta no válida.**\n\n"
+                "**Carpetas disponibles:**\n"
+                "• `download` - Archivos descargados\n"
+                "• `packed` - Archivos empaquetados"
+            )
+            return
+        
+        # Actualizar carpeta actual del usuario
+        user_current_dirs[user_id] = folder
+        
+        await message.reply_text(f"✅ **Cambiado a carpeta:** `{folder}`")
+        
+    except Exception as e:
+        logger.error(f"Error en /cd: {e}")
+        await message.reply_text("Error al cambiar de carpeta.")
+
+async def dir_command(client, message):
+    """Maneja el comando /dir para ver la ruta actual"""
+    try:
+        user_id = message.from_user.id
+        
+        # Obtener carpeta actual o usar 'download' por defecto
+        current_dir = user_current_dirs.get(user_id, 'download')
+        
+        await message.reply_text(f"📁 **Ruta actual:** `/static/{user_id}/{current_dir}/`")
+        
+    except Exception as e:
+        logger.error(f"Error en /dir: {e}")
+        await message.reply_text("Error al obtener ruta actual.")
+
+async def list_command(client, message):
+    """Maneja el comando /list para listar archivos"""
+    try:
+        user_id = message.from_user.id
+        
+        # Obtener carpeta actual o usar 'download' por defecto
+        current_dir = user_current_dirs.get(user_id, 'download')
+        
+        if current_dir == 'download':
+            files = file_service.list_user_files(user_id)
+        else:
+            # Listar archivos empaquetados
+            packed_dir = os.path.join("static", str(user_id), "packed")
+            files = []
+            
+            if os.path.exists(packed_dir):
+                file_list = os.listdir(packed_dir)
+                for i, filename in enumerate(file_list, 1):
+                    file_path = os.path.join(packed_dir, filename)
+                    if os.path.isfile(file_path):
+                        size = os.path.getsize(file_path)
+                        download_url = file_service.create_packed_url(user_id, filename)
+                        files.append({
+                            'number': i,
+                            'name': filename,
+                            'size_mb': size / (1024 * 1024),
+                            'url': download_url
+                        })
+        
+        if not files:
+            await message.reply_text(
+                f"**No hay archivos en la carpeta `{current_dir}`.**\n\n"
+                "Usa `/cd download` o `/cd packed` para cambiar de carpeta."
+            )
+            return
+        
+        files_text = f"**📁 Archivos en `{current_dir}` ({len(files)}):**\n\n"
         
         for file_info in files:
             files_text += f"**{file_info['number']}.** `{file_info['name']}` ({file_info['size_mb']:.1f} MB)\n"
             files_text += f"🔗 [Descargar]({file_info['url']})\n\n"
 
         files_text += f"**Usa los números para gestionar archivos:**\n"
-        files_text += f"• Renombrar: `/rename número nuevo_nombre`\n"
-        files_text += f"• Eliminar: Usa los botones debajo\n"
+        files_text += f"• Eliminar: `/delete número`\n"
+        if current_dir == 'download':
+            files_text += f"• Renombrar: `/rename número nuevo_nombre`\n"
 
-        keyboard_buttons = []
-        for i in range(0, len(files), 2):
-            row = []
-            for file_info in files[i:i+2]:
-                row.append(InlineKeyboardButton(
-                    f"🗑️ {file_info['number']}",
-                    callback_data=f"delete_{file_info['number']}"
-                ))
-            keyboard_buttons.append(row)
-        
-        keyboard_buttons.append([InlineKeyboardButton("🗑️ ELIMINAR TODOS", callback_data="delete_all")])
-        
-        keyboard = InlineKeyboardMarkup(keyboard_buttons)
-
-        await message.reply_text(files_text, reply_markup=keyboard, disable_web_page_preview=True)
+        await message.reply_text(files_text, disable_web_page_preview=True)
 
     except Exception as e:
-        logger.error(f"Error en /files: {e}")
+        logger.error(f"Error en /list: {e}")
         await message.reply_text("Error al listar archivos.")
 
 async def status_command(client, message):
@@ -210,14 +279,9 @@ async def pack_command(client, message):
 
 **Al descargar:** Descomprime el ZIP para obtener todos tus archivos"""
             
-            clear_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🗑️ Vaciar Empaquetados", callback_data="clear_packed")]
-            ])
-            
             await status_msg.edit_text(
                 response_text, 
-                disable_web_page_preview=True,
-                reply_markup=clear_keyboard
+                disable_web_page_preview=True
             )
             
         else:
@@ -248,23 +312,10 @@ async def pack_command(client, message):
                 for file_info in files:
                     part_text = f"**Parte {file_info['number']}:** 📎 [{file_info['filename']}]({file_info['url']})"
                     await message.reply_text(part_text, disable_web_page_preview=True)
-                
-                clear_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🗑️ Vaciar Empaquetados", callback_data="clear_packed")]
-                ])
-                await message.reply_text(
-                    "¿Quieres liberar espacio?",
-                    reply_markup=clear_keyboard
-                )
             else:
-                clear_keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🗑️ Vaciar Empaquetados", callback_data="clear_packed")]
-                ])
-                
                 await status_msg.edit_text(
                     response_text, 
-                    disable_web_page_preview=True,
-                    reply_markup=clear_keyboard
+                    disable_web_page_preview=True
                 )
                 
         logger.info(f"Empaquetado completado para usuario {user_id}: {len(files)} archivos")
@@ -304,14 +355,9 @@ async def rename_command(client, message):
             response_text += f"**Nuevo enlace:**\n"
             response_text += f"📎 [{new_name}]({new_url})"
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔗 Abrir Enlace", url=new_url)]
-            ])
-            
             await message.reply_text(
                 response_text,
-                disable_web_page_preview=True,
-                reply_markup=keyboard
+                disable_web_page_preview=True
             )
         else:
             await message.reply_text(f"**{result_message}**")
@@ -319,6 +365,50 @@ async def rename_command(client, message):
     except Exception as e:
         logger.error(f"Error en comando /rename: {e}")
         await message.reply_text("Error al renombrar archivo.")
+
+async def delete_command(client, message):
+    """Maneja el comando /delete"""
+    try:
+        user_id = message.from_user.id
+        command_parts = message.text.split()
+        
+        if len(command_parts) == 1:
+            # Eliminar todos los archivos (confirmación)
+            confirm_text = """**¿Eliminar TODOS los archivos?**
+
+**Esta acción:**
+• Eliminará todos tus archivos
+• No se puede deshacer
+• Los enlaces dejarán de funcionar
+
+**Para confirmar:** `/delete confirm`"""
+            
+            await message.reply_text(confirm_text)
+            return
+        
+        if command_parts[1] == "confirm":
+            # Eliminar todos los archivos
+            success, result_message = file_service.delete_all_files(user_id)
+            await message.reply_text(f"**{result_message}**")
+            return
+        
+        # Eliminar archivo específico
+        try:
+            file_number = int(command_parts[1])
+        except ValueError:
+            await message.reply_text("Formato incorrecto. Usa: `/delete número` o `/delete` para eliminar todo")
+            return
+        
+        # Obtener carpeta actual para determinar tipo de archivo
+        current_dir = user_current_dirs.get(user_id, 'download')
+        file_type = current_dir
+        
+        success, result_message = file_service.delete_file_by_number(user_id, file_number, file_type)
+        await message.reply_text(f"**{result_message}**")
+            
+    except Exception as e:
+        logger.error(f"Error en comando /delete: {e}")
+        await message.reply_text("Error al eliminar archivo.")
 
 async def handle_file(client, message):
     """Maneja la recepción de archivos"""
@@ -459,22 +549,11 @@ async def handle_file(client, message):
 **Tamaño:** {size_mb:.2f} MB
 
 **Enlace de Descarga:**
-📎 [{original_filename}]({download_url})"""
+📎 [{original_filename}]({download_url})
 
-        try:
-            file_hash = file_service.create_file_hash(user_id, stored_filename)
-            file_service.store_file_mapping(file_hash, user_id, stored_filename)
-            
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔗 Abrir Enlace", url=download_url)],
-                [InlineKeyboardButton("🗑️ Eliminar", callback_data=f"del_{file_hash}")]
-            ])
+**Usa `/list` para ver todos tus archivos.**"""
 
-            await progress_msg.edit_text(success_text, reply_markup=keyboard)
-
-        except Exception as button_error:
-            logger.error(f"Error con botones: {button_error}")
-            await progress_msg.edit_text(success_text)
+        await progress_msg.edit_text(success_text, disable_web_page_preview=True)
 
         logger.info(f"Archivo guardado: {stored_filename} para usuario {user_id}")
 
@@ -484,120 +563,3 @@ async def handle_file(client, message):
             await message.reply_text("Error al procesar el archivo.")
         except:
             pass
-
-async def delete_file_callback(client, callback_query):
-    """Maneja el callback de eliminar archivos individuales"""
-    try:
-        data = callback_query.data
-        
-        if data.startswith("delete_"):
-            file_number_str = data.replace("delete_", "")
-            
-            if file_number_str == "all":
-                success, message = file_service.delete_all_files(callback_query.from_user.id)
-                if success:
-                    await callback_query.message.edit_text(f"**{message}**")
-                else:
-                    await callback_query.message.edit_text(f"**{message}**")
-                await callback_query.answer()
-                return
-            
-            try:
-                file_number = int(file_number_str)
-            except ValueError:
-                await callback_query.answer("Número de archivo inválido", show_alert=True)
-                return
-            
-            user_id = callback_query.from_user.id
-            
-            file_info = file_service.get_file_by_number(user_id, file_number)
-            if not file_info:
-                await callback_query.answer("Archivo no encontrado", show_alert=True)
-                return
-            
-            confirm_keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("✅ Sí, eliminar", callback_data=f"confirm_delete_{file_number}"),
-                    InlineKeyboardButton("❌ Cancelar", callback_data="cancel_delete")
-                ]
-            ])
-            
-            await callback_query.message.edit_text(
-                f"**¿Eliminar archivo #{file_number}?**\n\n"
-                f"**Archivo:** `{file_info['original_name']}`\n\n"
-                f"Esta acción no se puede deshacer.",
-                reply_markup=confirm_keyboard
-            )
-            
-        elif data.startswith("confirm_delete_"):
-            file_number = int(data.replace("confirm_delete_", ""))
-            user_id = callback_query.from_user.id
-            
-            success, message = file_service.delete_file_by_number(user_id, file_number)
-            if success:
-                await callback_query.message.edit_text(f"**{message}**")
-            else:
-                await callback_query.message.edit_text(f"**{message}**")
-            
-        elif data == "cancel_delete":
-            await callback_query.message.edit_text("**Eliminación cancelada.**")
-        
-        await callback_query.answer()
-        
-    except Exception as e:
-        logger.error(f"Error eliminando archivo: {e}")
-        await callback_query.answer("Error eliminando archivo", show_alert=True)
-
-async def clear_packed_callback(client, callback_query):
-    """Maneja el callback para vaciar la carpeta empaquetada"""
-    try:
-        user_id = callback_query.from_user.id
-        
-        confirm_keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Sí, eliminar todo", callback_data=f"confirm_clear_packed_{user_id}"),
-                InlineKeyboardButton("❌ Cancelar", callback_data="cancel_clear")
-            ]
-        ])
-        
-        await callback_query.message.edit_text(
-            "**¿Eliminar TODOS los archivos empaquetados?**\n\n"
-            "Esta acción no se puede deshacer.",
-            reply_markup=confirm_keyboard
-        )
-        await callback_query.answer()
-        
-    except Exception as e:
-        logger.error(f"Error en clear_packed_callback: {e}")
-        await callback_query.answer("Error", show_alert=True)
-
-async def confirm_clear_packed_callback(client, callback_query):
-    """Maneja la confirmación para vaciar la carpeta empaquetada"""
-    try:
-        data = callback_query.data.replace("confirm_clear_packed_", "")
-        user_id = int(data)
-        
-        if callback_query.from_user.id != user_id:
-            await callback_query.answer("No puedes realizar esta acción", show_alert=True)
-            return
-        
-        success, message = packing_service.clear_packed_folder(user_id)
-        
-        if success:
-            await callback_query.message.edit_text(f"**{message}**")
-        else:
-            await callback_query.message.edit_text(f"**{message}**")
-            
-        await callback_query.answer()
-        
-    except Exception as e:
-        logger.error(f"Error en confirm_clear_packed_callback: {e}")
-        await callback_query.answer("Error al eliminar archivos", show_alert=True)
-
-async def cancel_clear_callback(client, callback_query):
-    """Maneja la cancelación de limpieza"""
-    try:
-        await callback_query.message.edit_text("**Operación cancelada.**")
-        await callback_query.answer("Operación cancelada")
-    except Exception as e:
-        logger.error(f"Error en cancel_clear_callback: {e}")
