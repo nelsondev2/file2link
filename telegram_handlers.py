@@ -3,6 +3,7 @@ import logging
 import sys
 import time
 import concurrent.futures
+import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -18,6 +19,9 @@ user_current_dirs = {}
 
 # Variable global para almacenar mensajes de progreso activos
 active_progress_messages = {}
+
+# Lock para sincronización de progresos
+progress_lock = asyncio.Lock()
 
 async def start_command(client, message):
     """Maneja el comando /start"""
@@ -432,12 +436,12 @@ async def delete_command(client, message):
         await message.reply_text("Error al eliminar archivo.")
 
 async def handle_file(client, message):
-    """Maneja la recepción de archivos con progreso unificado CORREGIDO"""
+    """Maneja la recepción de archivos con progreso unificado - SOLUCIÓN DEFINITIVA"""
     try:
         user = message.from_user
         user_id = user.id
 
-        logger.info(f"Archivo recibido de {user_id}. Tipo de mensaje: {message.media}")
+        logger.info(f"📨 Archivo recibido de {user_id}")
 
         user_dir = file_service.get_user_directory(user_id)
 
@@ -451,39 +455,32 @@ async def handle_file(client, message):
             file_type = "documento"
             original_filename = message.document.file_name or "archivo"
             file_size = file_obj.file_size
-            logger.info(f"Detectado documento: {original_filename}, tamaño: {file_size}")
         elif message.video:
             file_obj = message.video
             file_type = "video"
             original_filename = message.video.file_name or "video.mp4"
             file_size = file_obj.file_size
-            logger.info(f"Detectado video: {original_filename}, tamaño: {file_size}")
         elif message.audio:
             file_obj = message.audio
             file_type = "audio"
             original_filename = message.audio.file_name or "audio.mp3"
             file_size = file_obj.file_size
-            logger.info(f"Detectado audio: {original_filename}, tamaño: {file_size}")
         elif message.photo:
-            file_obj = message.photo[-1] # Obtener la foto de mayor resolución
+            file_obj = message.photo[-1]
             file_type = "foto"
             original_filename = f"foto_{file_obj.file_id}.jpg"
             file_size = file_obj.file_size
-            logger.info(f"Detectada foto: {original_filename}, tamaño: {file_size}")
         else:
-            logger.warning(f"Mensaje no contiene un tipo de archivo manejable: {message}")
+            logger.warning(f"❌ Mensaje no contiene archivo manejable")
             return
 
         if not file_obj:
-            logger.error(f"No se pudo obtener el objeto de archivo para el mensaje: {message}")
-            await message.reply_text("Error: No se pudo identificar el archivo en el mensaje.")
+            await message.reply_text("❌ Error: No se pudo identificar el archivo")
             return
 
         sanitized_name = file_service.sanitize_filename(original_filename)
-        file_number = file_service.get_next_file_number(user_id)
         
         stored_filename = sanitized_name
-        
         counter = 1
         base_stored_filename = stored_filename
         file_path = os.path.join(user_dir, stored_filename)
@@ -494,171 +491,195 @@ async def handle_file(client, message):
             file_path = os.path.join(user_dir, stored_filename)
             counter += 1
 
-        # Registrar el archivo ANTES de iniciar la descarga
-        registered_file_num = file_service.register_file(user_id, original_filename, stored_filename)
+        # Registrar archivo
+        file_service.register_file(user_id, original_filename, stored_filename)
 
         start_time = time.time()
-        
-        # Inicializar o actualizar progreso unificado
-        if user_id not in active_progress_messages:
-            # Crear mensaje inicial de progreso unificado
-            initial_message = progress_service.create_unified_progress_message(
-                filename=original_filename,
-                current=0,
-                total=file_size,
-                speed=0,
-                file_num=1,
-                total_files=1,  # Empezamos con 1 archivo
-                user_id=user_id,
-                process_type="Descargando"
-            )
-            progress_msg = await message.reply_text(initial_message)
-            active_progress_messages[user_id] = {
-                'message': progress_msg,
-                'start_time': start_time,
-                'files': {original_filename: {'current': 0, 'total': file_size, 'completed': False}},
-                'total_files': 1,  # Total de archivos en este lote
-                'completed_files': 0,
-                'last_update': 0
-            }
-            logger.info(f"Nuevo progreso unificado creado para usuario {user_id}")
-        else:
-            # Agregar nuevo archivo al progreso existente
-            active_progress_messages[user_id]['files'][original_filename] = {
+
+        # USAR LOCK PARA SINCRONIZACIÓN
+        async with progress_lock:
+            if user_id not in active_progress_messages:
+                # Crear NUEVO progreso unificado
+                initial_message = progress_service.create_unified_progress_message(
+                    filename=original_filename,
+                    current=0,
+                    total=file_size,
+                    speed=0,
+                    file_num=1,
+                    total_files=1,
+                    user_id=user_id,
+                    process_type="Descargando"
+                )
+                progress_msg = await message.reply_text(initial_message)
+                
+                active_progress_messages[user_id] = {
+                    'message': progress_msg,
+                    'start_time': start_time,
+                    'files': {},
+                    'total_files': 0,
+                    'completed_files': 0,
+                    'last_update': 0,
+                    'lock': asyncio.Lock()
+                }
+                logger.info(f"🆕 NUEVO progreso unificado para usuario {user_id}")
+
+            # Agregar este archivo al progreso existente
+            progress_data = active_progress_messages[user_id]
+            progress_data['files'][original_filename] = {
                 'current': 0, 
                 'total': file_size, 
-                'completed': False
+                'completed': False,
+                'start_time': start_time
             }
-            active_progress_messages[user_id]['total_files'] = len(active_progress_messages[user_id]['files'])
-            logger.info(f"Archivo agregado a progreso existente. Total: {active_progress_messages[user_id]['total_files']}")
+            progress_data['total_files'] = len(progress_data['files'])
+            logger.info(f"📁 Archivo '{original_filename}' agregado. Total: {progress_data['total_files']}")
 
-        progress_data = active_progress_messages[user_id]
-
-        async def progress_callback(current, total, filename, user_id):
+        # Callback de progreso mejorado
+        last_callback_time = 0
+        
+        async def update_progress(current, total):
+            nonlocal last_callback_time
             try:
                 current_time = time.time()
-                last_update = progress_data.get('last_update', 0)
                 
-                # Actualizar progreso del archivo actual
-                if filename in progress_data['files']:
-                    progress_data['files'][filename]['current'] = current
-                    progress_data['files'][filename]['total'] = total
-                
-                # Actualizar cada 1.5 segundos o cuando se complete (más frecuente)
-                if current_time - last_update >= 1.5 or current == total:
-                    # Calcular progreso total
+                # Usar lock para actualizar datos compartidos
+                async with progress_data['lock']:
+                    # Actualizar progreso de este archivo
+                    progress_data['files'][original_filename]['current'] = current
+                    progress_data['files'][original_filename]['total'] = total
+                    
+                    # Calcular estadísticas globales
                     total_current = sum(f['current'] for f in progress_data['files'].values())
                     total_size = sum(f['total'] for f in progress_data['files'].values())
-                    elapsed_time = current_time - progress_data['start_time']
-                    speed = total_current / elapsed_time if elapsed_time > 0 else 0
+                    
+                    # Calcular velocidad global
+                    global_elapsed = current_time - progress_data['start_time']
+                    global_speed = total_current / global_elapsed if global_elapsed > 0 else 0
                     
                     # Contar archivos completados
                     completed_files = sum(1 for f in progress_data['files'].values() if f.get('completed', False))
                     
-                    # Encontrar archivo actualmente en progreso (el que no está completado)
-                    current_file = filename
+                    # Encontrar archivo actual en progreso
+                    current_active_file = original_filename
                     for file_name, file_data in progress_data['files'].items():
                         if not file_data.get('completed', False) and file_data['current'] < file_data['total']:
-                            current_file = file_name
+                            current_active_file = file_name
                             break
                     
-                    progress_message = progress_service.create_unified_progress_message(
-                        filename=current_file,
-                        current=total_current,
-                        total=total_size,
-                        speed=speed,
-                        file_num=completed_files + 1,  # +1 porque estamos en el siguiente
-                        total_files=progress_data['total_files'],
-                        user_id=user_id,
-                        process_type="Descargando"
-                    )
+                    # Actualizar cada 1.5 segundos máximo
+                    if current_time - progress_data['last_update'] >= 1.5 or current == total:
+                        progress_message = progress_service.create_unified_progress_message(
+                            filename=current_active_file,
+                            current=total_current,
+                            total=total_size,
+                            speed=global_speed,
+                            file_num=completed_files + 1,
+                            total_files=progress_data['total_files'],
+                            user_id=user_id,
+                            process_type="Descargando"
+                        )
+                        
+                        try:
+                            await progress_data['message'].edit_text(progress_message)
+                            progress_data['last_update'] = current_time
+                            logger.debug(f"📊 Progreso actualizado: {total_current}/{total_size} bytes")
+                        except Exception as e:
+                            logger.error(f"❌ Error editando mensaje: {e}")
+                    
+                    # Marcar como completado si terminó
+                    if current == total:
+                        progress_data['files'][original_filename]['completed'] = True
+                        progress_data['completed_files'] = completed_files + 1
+                        logger.info(f"✅ Archivo '{original_filename}' completado")
+                        
+                        # Verificar si TODOS los archivos están completos
+                        all_completed = all(f.get('completed', False) for f in progress_data['files'].values())
+                        if all_completed:
+                            await finalize_progress(user_id, original_filename, stored_filename, file_size)
+                
+                last_callback_time = current_time
+                
+            except Exception as e:
+                logger.error(f"❌ Error en callback de progreso: {e}")
+
+        # Función para finalizar el progreso
+        async def finalize_progress(user_id, last_filename, last_stored_filename, last_file_size):
+            try:
+                async with progress_lock:
+                    if user_id not in active_progress_messages:
+                        return
+                    
+                    progress_data = active_progress_messages[user_id]
+                    total_files_processed = progress_data['total_files']
+                    
+                    # Obtener información del último archivo
+                    files_list = file_service.list_user_files(user_id)
+                    current_file_number = None
+                    for file_info in files_list:
+                        if file_info['stored_name'] == last_stored_filename:
+                            current_file_number = file_info['number']
+                            break
+                    
+                    size_mb = last_file_size / (1024 * 1024)
+                    download_url = file_service.create_download_url(user_id, last_stored_filename)
+                    
+                    success_text = f"""**✅ Subida Completa - {total_files_processed} Archivos**
+
+**Último archivo procesado:**
+`#{current_file_number}` - `{last_filename}`
+**Tamaño:** {size_mb:.2f} MB
+**Enlace:** 📎 [{last_filename}]({download_url})
+
+**Usa `/list` para ver todos tus archivos.**"""
 
                     try:
-                        await progress_data['message'].edit_text(progress_message)
-                        progress_data['last_update'] = current_time
-                    except Exception as edit_error:
-                        logger.error(f"Error editando mensaje de progreso: {edit_error}")
+                        await progress_data['message'].edit_text(success_text, disable_web_page_preview=True)
+                    except Exception as e:
+                        logger.error(f"❌ Error editando mensaje final: {e}")
+                        # Intentar enviar nuevo mensaje si falla la edición
+                        await client.send_message(user_id, success_text, disable_web_page_preview=True)
                     
-                    # Marcar como completado si es el caso
-                    if current == total and filename in progress_data['files']:
-                        progress_data['files'][filename]['completed'] = True
-                        progress_data['completed_files'] = completed_files + 1
-
+                    # LIMPIAR progreso completado
+                    del active_progress_messages[user_id]
+                    logger.info(f"🧹 Progreso limpiado para usuario {user_id}. Archivos: {total_files_processed}")
+                    
             except Exception as e:
-                logger.error(f"Error en progress callback: {e}")
+                logger.error(f"❌ Error finalizando progreso: {e}")
 
-        async def update_progress(current, total):
-            await progress_callback(current, total, original_filename, user_id)
-
-        # Descargar el archivo
+        # DESCARGAR el archivo
+        logger.info(f"⬇️  Iniciando descarga de: {original_filename}")
         downloaded_path = await message.download(
             file_path,
             progress=update_progress
         )
 
         if not downloaded_path:
-            logger.error(f"Error al descargar archivo {original_filename}")
-            # Marcar como error pero mantener el progreso para otros archivos
-            if user_id in active_progress_messages and original_filename in active_progress_messages[user_id]['files']:
-                active_progress_messages[user_id]['files'][original_filename]['completed'] = True
-                active_progress_messages[user_id]['completed_files'] += 1
+            logger.error(f"❌ Error descargando: {original_filename}")
+            # Marcar como completado (con error)
+            async with progress_data['lock']:
+                progress_data['files'][original_filename]['completed'] = True
+                progress_data['completed_files'] += 1
             return
 
-        final_size = os.path.getsize(file_path)
-        size_mb = final_size / (1024 * 1024)
+        # Verificar si este fue el último archivo (por si acaso el callback no se disparó)
+        async with progress_data['lock']:
+            all_completed = all(f.get('completed', False) for f in progress_data['files'].values())
+            if all_completed and user_id in active_progress_messages:
+                await finalize_progress(user_id, original_filename, stored_filename, file_size)
 
-        download_url = file_service.create_download_url(user_id, stored_filename)
-
-        # Obtener el número de archivo que ve el usuario
-        files_list = file_service.list_user_files(user_id)
-        current_file_number = None
-        for file_info in files_list:
-            if file_info['stored_name'] == stored_filename:
-                current_file_number = file_info['number']
-                break
-
-        logger.info(f"Archivo {original_filename} descargado exitosamente. Número: {current_file_number}")
-
-        # Verificar si todos los archivos están completos
-        if user_id in active_progress_messages:
-            all_completed = all(f.get('completed', False) for f in active_progress_messages[user_id]['files'].values())
-            
-            if all_completed:
-                total_files_processed = active_progress_messages[user_id]['total_files']
-                success_text = f"""**✅ Subida Completa - {total_files_processed} Archivos**
-
-**Último archivo procesado:**
-`#{current_file_number}` - `{original_filename}`
-**Tamaño:** {size_mb:.2f} MB
-**Enlace:** 📎 [{original_filename}]({download_url})
-
-**Usa `/list` para ver todos tus archivos.**"""
-
-                try:
-                    await active_progress_messages[user_id]['message'].edit_text(success_text, disable_web_page_preview=True)
-                except Exception as e:
-                    logger.error(f"Error editando mensaje final: {e}")
-                    await message.reply_text(success_text, disable_web_page_preview=True)
-                
-                # Limpiar progreso completado
-                del active_progress_messages[user_id]
-                logger.info(f"Progreso unificado completado y limpiado para usuario {user_id}")
-            else:
-                # Solo log, no hacer nada - el callback se encargará de las actualizaciones
-                logger.info(f"Archivo {original_filename} completado, esperando otros archivos...")
-
-        logger.info(f"Archivo guardado: {stored_filename} para usuario {user_id}")
+        logger.info(f"💾 Archivo guardado: {stored_filename}")
 
     except Exception as e:
-        logger.error(f"Error procesando archivo: {e}", exc_info=True)
-        # Limpiar progreso en caso de error general
-        if user_id in active_progress_messages:
-            try:
-                await active_progress_messages[user_id]['message'].edit_text("❌ Error durante la subida de archivos.")
-                del active_progress_messages[user_id]
-            except:
-                pass
+        logger.error(f"❌ Error procesando archivo: {e}", exc_info=True)
+        # Limpiar progreso en caso de error
+        async with progress_lock:
+            if user_id in active_progress_messages:
+                try:
+                    await active_progress_messages[user_id]['message'].edit_text("❌ Error durante la subida de archivos.")
+                    del active_progress_messages[user_id]
+                except:
+                    pass
         try:
-            await message.reply_text("Error al procesar el archivo.")
+            await message.reply_text("❌ Error al procesar el archivo.")
         except:
             pass
