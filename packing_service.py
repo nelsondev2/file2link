@@ -87,10 +87,18 @@ class SimplePackingService:
             # Registrar archivo empaquetado
             file_num = file_service.register_file(user_id, f"{base_filename}.zip", f"{base_filename}.zip", "packed")
             
+            # Obtener el número que se muestra al usuario
+            packed_files = file_service.list_packed_files(user_id)
+            user_file_number = None
+            for file_info in packed_files:
+                if file_info['original_number'] == file_num:
+                    user_file_number = file_info['number']
+                    break
+            
             download_url = file_service.create_packed_url(user_id, f"{base_filename}.zip")
             
             return [{
-                'number': file_num,
+                'number': user_file_number if user_file_number else 1,  # Usar número de usuario
                 'filename': f"{base_filename}.zip",
                 'url': download_url,
                 'size_mb': size_mb,
@@ -159,8 +167,16 @@ class SimplePackingService:
                     # Registrar cada parte
                     file_num = file_service.register_file(user_id, part_filename, part_filename, "packed")
                     
+                    # Obtener el número que se muestra al usuario
+                    packed_files = file_service.list_packed_files(user_id)
+                    user_file_number = None
+                    for file_info in packed_files:
+                        if file_info['original_number'] == file_num:
+                            user_file_number = file_info['number']
+                            break
+                    
                     part_files.append({
-                        'number': file_num,
+                        'number': user_file_number if user_file_number else part_num,  # Usar número de usuario
                         'filename': part_filename,
                         'url': download_url,
                         'size_mb': part_size / (1024 * 1024)
