@@ -178,12 +178,19 @@ class FileService:
         file_data = None
         original_number = None
         
-        files_list = self.list_user_files(user_id)
-        for file_info in files_list:
-            if file_info['number'] == file_number:
-                original_number = file_info['original_number']
-                file_data = self.metadata[user_key]["files"].get(str(original_number))
-                break
+        # Para archivos descargados, usar list_user_files
+        if file_type == "download":
+            files_list = self.list_user_files(user_id)
+            for file_info in files_list:
+                if file_info['number'] == file_number:
+                    original_number = file_info['original_number']
+                    file_data = self.metadata[user_key]["files"].get(str(original_number))
+                    break
+        else:
+            # Para archivos empaquetados, buscar directamente
+            file_data = self.metadata[user_key]["files"].get(str(file_number))
+            if file_data:
+                original_number = file_number
         
         if not file_data:
             return None
@@ -194,7 +201,10 @@ class FileService:
         if not os.path.exists(file_path):
             return None
         
-        download_url = self.create_download_url(user_id, file_data["stored_name"])
+        if file_type == "download":
+            download_url = self.create_download_url(user_id, file_data["stored_name"])
+        else:
+            download_url = self.create_packed_url(user_id, file_data["stored_name"])
         
         return {
             'number': file_number,
@@ -248,7 +258,10 @@ class FileService:
             file_data["stored_name"] = new_stored_name
             self.save_metadata()
             
-            new_url = self.create_download_url(user_id, new_stored_name)
+            if file_type == "download":
+                new_url = self.create_download_url(user_id, new_stored_name)
+            else:
+                new_url = self.create_packed_url(user_id, new_stored_name)
             
             return True, f"Archivo renombrado a: {new_name}", new_url
             
