@@ -170,7 +170,7 @@ class FileService:
         return file_num
 
     def get_file_by_number(self, user_id, file_number, file_type="download"):
-        """Obtiene información de archivo por número (usa números originales)"""
+        """Obtiene información de archivo por número (usa números mostrados)"""
         user_key = f"{user_id}_{file_type}"
         if user_key not in self.metadata:
             return None
@@ -187,10 +187,23 @@ class FileService:
                     file_data = self.metadata[user_key]["files"].get(str(original_number))
                     break
         else:
-            # Para archivos empaquetados, buscar directamente
-            file_data = self.metadata[user_key]["files"].get(str(file_number))
-            if file_data:
-                original_number = file_number
+            # Para archivos empaquetados, buscar por número secuencial
+            files_list = []
+            packed_dir = os.path.join(BASE_DIR, str(user_id), "packed")
+            if os.path.exists(packed_dir):
+                file_list = os.listdir(packed_dir)
+                for i, filename in enumerate(file_list, 1):
+                    files_list.append({
+                        'number': i,
+                        'name': filename
+                    })
+            
+            # Buscar el archivo por número mostrado
+            for file_info in files_list:
+                if file_info['number'] == file_number:
+                    file_data = self.metadata[user_key]["files"].get(str(file_number))
+                    original_number = file_number
+                    break
         
         if not file_data:
             return None
