@@ -43,7 +43,7 @@ class ProgressService:
         """Crea mensaje de progreso unificado estilo File2Link MEJORADO"""
         
         # Barra de progreso (20 caracteres) - EN UNA SOLA LÍNEA
-        bar_length = 15
+        bar_length = 20
         if total > 0:
             filled_length = int(bar_length * current / total)
             bar = '▰' * filled_length + '▱' * (bar_length - filled_length)
@@ -86,7 +86,7 @@ class ProgressService:
         """Crea mensaje de progreso individual para un archivo específico"""
         
         # Barra de progreso (20 caracteres)
-        bar_length = 15
+        bar_length = 20
         if total > 0:
             filled_length = int(bar_length * current / total)
             bar = '▰' * filled_length + '▱' * (bar_length - filled_length)
@@ -181,7 +181,7 @@ class ProgressService:
         """Crea mensaje de progreso para subida de archivos"""
         
         # Barra de progreso (20 caracteres)
-        bar_length = 15
+        bar_length = 20
         if total > 0:
             filled_length = int(bar_length * current / total)
             bar = '▰' * filled_length + '▱' * (bar_length - filled_length)
