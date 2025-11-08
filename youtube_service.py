@@ -1,4 +1,3 @@
-# youtube_service.py
 import os
 import logging
 import yt_dlp
@@ -7,7 +6,6 @@ import concurrent.futures
 from config import BASE_DIR, YT_DLP_TIMEOUT, YT_DLP_MAX_FILE_SIZE_MB
 from file_service import file_service
 from load_manager import load_manager
-from progress_service import progress_service
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +25,7 @@ class YouTubeService:
         temp_dir = os.path.join(BASE_DIR, 'temp')
         os.makedirs(temp_dir, exist_ok=True)
 
-    async def download_youtube_video(self, url, user_id, progress_callback=None):
+    async def download_youtube_video(self, url, user_id):
         """Descarga un video de YouTube y lo guarda en la carpeta del usuario"""
         try:
             can_start, message = load_manager.can_start_process()
@@ -45,7 +43,7 @@ class YouTubeService:
                     return False, "No se pudo obtener información del video"
 
                 # Configurar opciones de descarga
-                user_dir = file_service.get_user_directory(user_id)
+                user_dir = file_service.get_user_directory(user_id, "downloads")
                 original_filename = f"{video_info['title']}.mp4"
                 sanitized_filename = file_service.sanitize_filename(original_filename)
                 
@@ -58,11 +56,11 @@ class YouTubeService:
                 download_opts['outtmpl'] = final_path
 
                 # Descargar el video
-                success, result = await self._download_video(url, download_opts, progress_callback)
+                success, result = await self._download_video(url, download_opts)
                 
                 if success:
                     # Registrar el archivo en el sistema
-                    file_number = file_service.register_file(user_id, original_filename, final_filename)
+                    file_number = file_service.register_file(user_id, original_filename, final_filename, "downloads")
                     download_url = file_service.create_download_url(user_id, final_filename)
                     
                     file_size = os.path.getsize(final_path)
@@ -111,7 +109,7 @@ class YouTubeService:
             logger.error(f"Error obteniendo info del video: {e}")
             return None
 
-    async def _download_video(self, url, opts, progress_callback):
+    async def _download_video(self, url, opts):
         """Descarga el video con manejo de progreso"""
         try:
             loop = asyncio.get_event_loop()
