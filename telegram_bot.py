@@ -6,8 +6,8 @@ from pyrogram import Client, filters
 from config import API_ID, API_HASH, BOT_TOKEN
 from telegram_handlers import (
     start_command, help_command, files_command, status_command,
-    pack_command, rename_command, handle_file, delete_file_callback,
-    clear_packed_callback, confirm_clear_packed_callback, cancel_clear_callback
+    pack_command, rename_command, handle_file, delete_command,
+    cd_command, dir_command, list_command
 )
 
 logger = logging.getLogger(__name__)
@@ -19,28 +19,29 @@ class TelegramBot:
 
     async def setup_handlers(self):
         """Configura todos los handlers del bot"""
-        # Comandos
+        # Comandos principales
         self.client.on_message(filters.command("start") & filters.private)(start_command)
         self.client.on_message(filters.command("help") & filters.private)(help_command)
-        self.client.on_message(filters.command("files") & filters.private)(files_command)
         self.client.on_message(filters.command("status") & filters.private)(status_command)
         self.client.on_message(filters.command("pack") & filters.private)(pack_command)
-        self.client.on_message(filters.command("rename") & filters.private)(rename_command)
         
-        # Archivos
+        # Nuevos comandos de navegación
+        self.client.on_message(filters.command("cd") & filters.private)(cd_command)
+        self.client.on_message(filters.command("dir") & filters.private)(dir_command)
+        self.client.on_message(filters.command("list") & filters.private)(list_command)
+        
+        # Comandos de gestión
+        self.client.on_message(filters.command("rename") & filters.private)(rename_command)
+        self.client.on_message(filters.command("delete") & filters.private)(delete_command)
+        
+        # Archivos (mantener files_command por compatibilidad)
+        self.client.on_message(filters.command("files") & filters.private)(files_command)
+        
+        # Recepción de archivos
         self.client.on_message(
             (filters.document | filters.video | filters.audio | filters.photo) &
             filters.private
         )(handle_file)
-        
-        # Callbacks
-        self.client.on_callback_query(filters.regex(r"^del_"))(delete_file_callback)
-        self.client.on_callback_query(filters.regex(r"^delete_"))(delete_file_callback)
-        self.client.on_callback_query(filters.regex(r"^confirm_delete_"))(delete_file_callback)
-        self.client.on_callback_query(filters.regex("cancel_delete"))(delete_file_callback)
-        self.client.on_callback_query(filters.regex("clear_packed"))(clear_packed_callback)
-        self.client.on_callback_query(filters.regex(r"^confirm_clear_packed_"))(confirm_clear_packed_callback)
-        self.client.on_callback_query(filters.regex("cancel_clear"))(cancel_clear_callback)
 
     async def start_bot(self):
         """Inicia el bot de Telegram"""
