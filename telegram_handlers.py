@@ -3,7 +3,6 @@ import logging
 import sys
 import time
 import concurrent.futures
-import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -13,15 +12,6 @@ from progress_service import progress_service
 from packing_service import packing_service
 
 logger = logging.getLogger(__name__)
-
-# Variable global para almacenar la carpeta actual por usuario
-user_current_dirs = {}
-
-# Variable global para almacenar mensajes de progreso activos
-active_progress_messages = {}
-
-# Lock para sincronización de progresos
-progress_lock = asyncio.Lock()
 
 async def start_command(client, message):
     """Maneja el comando /start"""
@@ -35,12 +25,11 @@ async def start_command(client, message):
 **Comandos Disponibles:**
 `/start` - Mensaje de bienvenida
 `/help` - Ayuda y comandos disponibles
-`/cd` - Cambiar a carpeta (download o packed)
-`/dir` - Ver ruta actual
-`/list` - Listar archivos en carpeta actual
-`/pack` - Empaquetar archivos en download
-`/rename` - Renombrar archivo
-`/delete` - Eliminar archivo o todos
+`/files` - Ver tus archivos numerados
+`/status` - Ver tu estado y uso
+`/pack` - Empaquetar todos tus archivos
+`/pack [MB]` - Empaquetar y dividir (ej: `/pack 100`)
+`/rename [número] [nuevo_nombre]` - Renombrar archivo
 
 **¿Cómo Funciona?**
 1. Envíame cualquier archivo
@@ -61,19 +50,13 @@ async def help_command(client, message):
     try:
         help_text = """📚 **Ayuda - Comandos Disponibles**
 
-**Navegación:**
-`/cd download` - Ir a carpeta de descargas
-`/cd packed` - Ir a carpeta empaquetados
-`/dir` - Ver ruta actual
-`/list` - Listar archivos en carpeta actual
-
 **Gestión de Archivos:**
-`/delete` - Eliminar TODOS los archivos
-`/delete número` - Eliminar archivo específico
-`/rename número nuevo_nombre` - Renombrar archivo
+`/files` - Ver todos tus archivos con números
+`/status` - Ver tu uso de almacenamiento
+`/rename N NUEVO_NOMBRE` - Renombrar archivo
 
 **Empaquetado:**
-`/pack` - Crear ZIP de todos los archivos en download
+`/pack` - Crear ZIP de todos los archivos
 `/pack MB` - Dividir en partes de MB especificados
 
 **Información:**
@@ -82,103 +65,17 @@ async def help_command(client, message):
 
 **Uso Básico:**
 1. Envía archivos al bot
-2. Usa `/cd download` para ir a descargas
-3. Usa `/list` para ver archivos
-4. Usa números para gestionar archivos"""
+2. Usa `/files` para ver la lista
+3. Usa los números para gestionar archivos
+4. Usa `/pack` para empaquetar todo"""
 
         await message.reply_text(help_text)
 
     except Exception as e:
         logger.error(f"Error en /help: {e}")
 
-async def cd_command(client, message):
-    """Maneja el comando /cd para cambiar de carpeta"""
-    try:
-        user_id = message.from_user.id
-        command_parts = message.text.split()
-        
-        if len(command_parts) < 2:
-            await message.reply_text(
-                "**Uso:** `/cd carpeta`\n\n"
-                "**Carpetas disponibles:**\n"
-                "• `download` - Archivos descargados\n"
-                "• `packed` - Archivos empaquetados"
-            )
-            return
-        
-        folder = command_parts[1].lower()
-        
-        if folder not in ['download', 'packed']:
-            await message.reply_text(
-                "**Carpeta no válida.**\n\n"
-                "**Carpetas disponibles:**\n"
-                "• `download` - Archivos descargados\n"
-                "• `packed` - Archivos empaquetados"
-            )
-            return
-        
-        # Actualizar carpeta actual del usuario
-        user_current_dirs[user_id] = folder
-        
-        await message.reply_text(f"✅ **Cambiado a carpeta:** `{folder}`")
-        
-    except Exception as e:
-        logger.error(f"Error en /cd: {e}")
-        await message.reply_text("Error al cambiar de carpeta.")
-
-async def dir_command(client, message):
-    """Maneja el comando /dir para ver la ruta actual"""
-    try:
-        user_id = message.from_user.id
-        
-        # Obtener carpeta actual o usar 'download' por defecto
-        current_dir = user_current_dirs.get(user_id, 'download')
-        
-        await message.reply_text(f"📁 **Ruta actual:** `/static/{user_id}/{current_dir}/`")
-        
-    except Exception as e:
-        logger.error(f"Error en /dir: {e}")
-        await message.reply_text("Error al obtener ruta actual.")
-
-async def list_command(client, message):
-    """Maneja el comando /list para listar archivos"""
-    try:
-        user_id = message.from_user.id
-        
-        # Obtener carpeta actual o usar 'download' por defecto
-        current_dir = user_current_dirs.get(user_id, 'download')
-        
-        if current_dir == 'download':
-            files = file_service.list_user_files(user_id)
-        else:
-            files = file_service.list_packed_files(user_id)
-        
-        if not files:
-            await message.reply_text(
-                f"**No hay archivos en la carpeta `{current_dir}`.**\n\n"
-                "Usa `/cd download` o `/cd packed` para cambiar de carpeta."
-            )
-            return
-        
-        files_text = f"**📁 Archivos en `{current_dir}` ({len(files)}):**\n\n"
-        
-        for file_info in files:
-            files_text += f"**{file_info['number']}.** `{file_info['name']}` ({file_info['size_mb']:.1f} MB)\n"
-            files_text += f"🔗 [Descargar]({file_info['url']})\n\n"
-
-        files_text += f"**Usa los números para gestionar archivos:**\n"
-        files_text += f"• Eliminar: `/delete número`\n"
-        if current_dir == 'download':
-            files_text += f"• Renombrar: `/rename número nuevo_nombre`\n"
-
-        await message.reply_text(files_text, disable_web_page_preview=True)
-
-    except Exception as e:
-        logger.error(f"Error en /list: {e}")
-        await message.reply_text("Error al listar archivos.")
-
 async def files_command(client, message):
-    """Maneja el comando /files (compatibilidad)"""
+    """Maneja el comando /files"""
     try:
         user_id = message.from_user.id
         files = file_service.list_user_files(user_id)
@@ -198,10 +95,23 @@ async def files_command(client, message):
 
         files_text += f"**Usa los números para gestionar archivos:**\n"
         files_text += f"• Renombrar: `/rename número nuevo_nombre`\n"
-        files_text += f"• Eliminar: `/delete número`\n"
-        files_text += f"• Ver todos: `/list`"
+        files_text += f"• Eliminar: Usa los botones debajo\n"
 
-        await message.reply_text(files_text, disable_web_page_preview=True)
+        keyboard_buttons = []
+        for i in range(0, len(files), 2):
+            row = []
+            for file_info in files[i:i+2]:
+                row.append(InlineKeyboardButton(
+                    f"🗑️ {file_info['number']}",
+                    callback_data=f"delete_{file_info['number']}"
+                ))
+            keyboard_buttons.append(row)
+        
+        keyboard_buttons.append([InlineKeyboardButton("🗑️ ELIMINAR TODOS", callback_data="delete_all")])
+        
+        keyboard = InlineKeyboardMarkup(keyboard_buttons)
+
+        await message.reply_text(files_text, reply_markup=keyboard, disable_web_page_preview=True)
 
     except Exception as e:
         logger.error(f"Error en /files: {e}")
@@ -300,9 +210,14 @@ async def pack_command(client, message):
 
 **Al descargar:** Descomprime el ZIP para obtener todos tus archivos"""
             
+            clear_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗑️ Vaciar Empaquetados", callback_data="clear_packed")]
+            ])
+            
             await status_msg.edit_text(
                 response_text, 
-                disable_web_page_preview=True
+                disable_web_page_preview=True,
+                reply_markup=clear_keyboard
             )
             
         else:
@@ -333,10 +248,23 @@ async def pack_command(client, message):
                 for file_info in files:
                     part_text = f"**Parte {file_info['number']}:** 📎 [{file_info['filename']}]({file_info['url']})"
                     await message.reply_text(part_text, disable_web_page_preview=True)
+                
+                clear_keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🗑️ Vaciar Empaquetados", callback_data="clear_packed")]
+                ])
+                await message.reply_text(
+                    "¿Quieres liberar espacio?",
+                    reply_markup=clear_keyboard
+                )
             else:
+                clear_keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🗑️ Vaciar Empaquetados", callback_data="clear_packed")]
+                ])
+                
                 await status_msg.edit_text(
                     response_text, 
-                    disable_web_page_preview=True
+                    disable_web_page_preview=True,
+                    reply_markup=clear_keyboard
                 )
                 
         logger.info(f"Empaquetado completado para usuario {user_id}: {len(files)} archivos")
@@ -369,20 +297,21 @@ async def rename_command(client, message):
             await message.reply_text("El nuevo nombre no puede estar vacío.")
             return
         
-        # Obtener carpeta actual para determinar tipo de archivo
-        current_dir = user_current_dirs.get(user_id, 'download')
-        file_type = current_dir
-        
-        success, result_message, new_url = file_service.rename_file(user_id, file_number, new_name, file_type)
+        success, result_message, new_url = file_service.rename_file(user_id, file_number, new_name)
         
         if success:
             response_text = f"**{result_message}**\n\n"
             response_text += f"**Nuevo enlace:**\n"
             response_text += f"📎 [{new_name}]({new_url})"
             
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔗 Abrir Enlace", url=new_url)]
+            ])
+            
             await message.reply_text(
                 response_text,
-                disable_web_page_preview=True
+                disable_web_page_preview=True,
+                reply_markup=keyboard
             )
         else:
             await message.reply_text(f"**{result_message}**")
@@ -391,57 +320,14 @@ async def rename_command(client, message):
         logger.error(f"Error en comando /rename: {e}")
         await message.reply_text("Error al renombrar archivo.")
 
-async def delete_command(client, message):
-    """Maneja el comando /delete"""
-    try:
-        user_id = message.from_user.id
-        command_parts = message.text.split()
-        
-        if len(command_parts) == 1:
-            # Eliminar todos los archivos (confirmación)
-            confirm_text = """**¿Eliminar TODOS los archivos?**
-
-**Esta acción:**
-• Eliminará todos tus archivos
-• No se puede deshacer
-• Los enlaces dejarán de funcionar
-
-**Para confirmar:** `/delete confirm`"""
-            
-            await message.reply_text(confirm_text)
-            return
-        
-        if command_parts[1] == "confirm":
-            # Eliminar todos los archivos
-            success, result_message = file_service.delete_all_files(user_id)
-            await message.reply_text(f"**{result_message}**")
-            return
-        
-        # Eliminar archivo específico
-        try:
-            file_number = int(command_parts[1])
-        except ValueError:
-            await message.reply_text("Formato incorrecto. Usa: `/delete número` o `/delete` para eliminar todo")
-            return
-        
-        # Obtener carpeta actual para determinar tipo de archivo
-        current_dir = user_current_dirs.get(user_id, 'download')
-        file_type = current_dir
-        
-        success, result_message = file_service.delete_file_by_number(user_id, file_number, file_type)
-        await message.reply_text(f"**{result_message}**")
-            
-    except Exception as e:
-        logger.error(f"Error en comando /delete: {e}")
-        await message.reply_text("Error al eliminar archivo.")
-
 async def handle_file(client, message):
-    """Maneja la recepción de archivos con progreso individual por archivo"""
+    """Maneja la recepción de archivos"""
     try:
         user = message.from_user
         user_id = user.id
 
-        logger.info(f"📨 Archivo recibido de {user_id}")
+        logger.info(f"Archivo recibido de {user_id}. Tipo de mensaje: {message.media}")
+        logger.debug(f"Objeto message completo: {message}")
 
         user_dir = file_service.get_user_directory(user_id)
 
@@ -455,32 +341,39 @@ async def handle_file(client, message):
             file_type = "documento"
             original_filename = message.document.file_name or "archivo"
             file_size = file_obj.file_size
+            logger.info(f"Detectado documento: {original_filename}, tamaño: {file_size}")
         elif message.video:
             file_obj = message.video
             file_type = "video"
             original_filename = message.video.file_name or "video.mp4"
             file_size = file_obj.file_size
+            logger.info(f"Detectado video: {original_filename}, tamaño: {file_size}")
         elif message.audio:
             file_obj = message.audio
             file_type = "audio"
             original_filename = message.audio.file_name or "audio.mp3"
             file_size = file_obj.file_size
+            logger.info(f"Detectado audio: {original_filename}, tamaño: {file_size}")
         elif message.photo:
-            file_obj = message.photo[-1]
+            file_obj = message.photo[-1] # Obtener la foto de mayor resolución
             file_type = "foto"
             original_filename = f"foto_{file_obj.file_id}.jpg"
             file_size = file_obj.file_size
+            logger.info(f"Detectada foto: {original_filename}, tamaño: {file_size}")
         else:
-            logger.warning(f"❌ Mensaje no contiene archivo manejable")
+            logger.warning(f"Mensaje no contiene un tipo de archivo manejable: {message}")
             return
 
         if not file_obj:
-            await message.reply_text("❌ Error: No se pudo identificar el archivo")
+            logger.error(f"No se pudo obtener el objeto de archivo para el mensaje: {message}")
+            await message.reply_text("Error: No se pudo identificar el archivo en el mensaje.")
             return
 
         sanitized_name = file_service.sanitize_filename(original_filename)
+        file_number = file_service.get_next_file_number(user_id)
         
         stored_filename = sanitized_name
+        
         counter = 1
         base_stored_filename = stored_filename
         file_path = os.path.join(user_dir, stored_filename)
@@ -491,216 +384,220 @@ async def handle_file(client, message):
             file_path = os.path.join(user_dir, stored_filename)
             counter += 1
 
-        # Registrar archivo
         file_service.register_file(user_id, original_filename, stored_filename)
 
         start_time = time.time()
+        initial_message = progress_service.create_progress_message(
+            filename=original_filename,
+            current=0,
+            total=file_size,
+            speed=0,
+            file_num=1,
+            total_files=1,
+            user_id=user_id,
+            process_type="Descargando"
+        )
 
-        # USAR LOCK PARA SINCRONIZACIÓN
-        async with progress_lock:
-            if user_id not in active_progress_messages:
-                # Inicializar estructura para este usuario
-                active_progress_messages[user_id] = {
-                    'current_file_index': 0,
-                    'total_files': 0,
-                    'files_queue': [],
-                    'lock': asyncio.Lock()
-                }
+        progress_msg = await message.reply_text(initial_message)
 
-            progress_data = active_progress_messages[user_id]
-            
-            # Agregar archivo a la cola
-            file_data = {
-                'filename': original_filename,
-                'stored_name': stored_filename,
-                'size': file_size,
-                'start_time': start_time,
-                'completed': False,
-                'message': None
-            }
-            progress_data['files_queue'].append(file_data)
-            progress_data['total_files'] = len(progress_data['files_queue'])
-            
-            # Si es el primer archivo, iniciar progreso inmediatamente
-            if progress_data['total_files'] == 1:
-                await start_file_progress(client, user_id, 0)
-            
-            logger.info(f"📁 Archivo '{original_filename}' agregado a la cola. Posición: {progress_data['total_files']}")
+        progress_data = {'last_update': 0}
 
-        # Callback de progreso individual para ESTE archivo
-        last_callback_time = 0
-        
-        async def update_progress(current, total):
-            nonlocal last_callback_time
+        async def progress_callback(current, total, message, filename, user_id, start_time):
             try:
-                current_time = time.time()
-                
-                # Actualizar cada 1.5 segundos máximo
-                if current_time - last_callback_time >= 1.5 or current == total:
-                    async with progress_data['lock']:
-                        current_file_index = progress_data['current_file_index']
-                        if current_file_index < len(progress_data['files_queue']):
-                            current_file = progress_data['files_queue'][current_file_index]
-                            
-                            # Calcular velocidad individual de ESTE archivo
-                            elapsed = current_time - current_file['start_time']
-                            speed = current / elapsed if elapsed > 0 else 0
-                            
-                            # Tiempo estimado para ESTE archivo
-                            if current > 0 and speed > 0 and total > current:
-                                remaining_bytes = total - current
-                                eta_seconds = remaining_bytes / speed
-                                if eta_seconds < 60:
-                                    eta_text = f"{int(eta_seconds)}s"
-                                elif eta_seconds < 3600:
-                                    eta_text = f"{int(eta_seconds/60)}m {int(eta_seconds%60)}s"
-                                else:
-                                    eta_text = f"{int(eta_seconds/3600)}h {int((eta_seconds%3600)/60)}m"
-                            else:
-                                eta_text = "calculando..."
-                            
-                            # Mensaje de progreso individual
-                            progress_message = progress_service.create_individual_progress_message(
-                                filename=current_file['filename'],
-                                current=current,
-                                total=total,
-                                speed=speed,
-                                file_num=current_file_index + 1,
-                                total_files=progress_data['total_files'],
-                                eta_text=eta_text
-                            )
-                            
-                            try:
-                                if current_file['message']:
-                                    await current_file['message'].edit_text(progress_message)
-                                else:
-                                    # Crear mensaje si no existe
-                                    current_file['message'] = await client.send_message(
-                                        user_id, 
-                                        progress_message
-                                    )
-                            except Exception as e:
-                                logger.error(f"❌ Error actualizando progreso: {e}")
-                    
-                    last_callback_time = current_time
-                
-            except Exception as e:
-                logger.error(f"❌ Error en callback de progreso: {e}")
+                elapsed_time = time.time() - start_time
+                speed = current / elapsed_time if elapsed_time > 0 else 0
 
-        # DESCARGAR el archivo
-        logger.info(f"⬇️  Iniciando descarga de: {original_filename}")
+                current_time = time.time()
+                last_update = progress_data.get('last_update', 0)
+
+                if current_time - last_update >= 2 or current == total:
+                    progress_message = progress_service.create_progress_message(
+                        filename=filename,
+                        current=current,
+                        total=total,
+                        speed=speed,
+                        file_num=1,
+                        total_files=1,
+                        user_id=user_id,
+                        process_type="Descargando"
+                    )
+
+                    await message.edit_text(progress_message)
+                    progress_data['last_update'] = current_time
+
+            except Exception as e:
+                logger.error(f"Error en progress callback: {e}")
+
+        async def update_progress(current, total):
+            await progress_callback(current, total, progress_msg, original_filename, user_id, start_time)
+
         downloaded_path = await message.download(
             file_path,
             progress=update_progress
         )
 
         if not downloaded_path:
-            logger.error(f"❌ Error descargando: {original_filename}")
-            # Marcar como completado (con error) y pasar al siguiente
-            await mark_file_completed_and_continue(client, user_id, original_filename, False)
+            await progress_msg.edit_text("Error al descargar el archivo.")
             return
 
-        # Archivo descargado exitosamente
         final_size = os.path.getsize(file_path)
         size_mb = final_size / (1024 * 1024)
+
         download_url = file_service.create_download_url(user_id, stored_filename)
 
-        logger.info(f"✅ Archivo '{original_filename}' descargado exitosamente")
-        
-        # Marcar como completado y pasar al siguiente archivo
-        await mark_file_completed_and_continue(client, user_id, original_filename, True, 
-                                             stored_filename, size_mb, download_url)
+        files_list = file_service.list_user_files(user_id)
+        current_file_number = None
+        for file_info in files_list:
+            if file_info['stored_name'] == stored_filename:
+                current_file_number = file_info['number']
+                break
+
+        success_text = f"""**¡Archivo #{current_file_number} Almacenado!**
+
+**Nombre:** `{original_filename}`
+**Tipo:** {file_type}
+**Tamaño:** {size_mb:.2f} MB
+
+**Enlace de Descarga:**
+📎 [{original_filename}]({download_url})"""
+
+        try:
+            file_hash = file_service.create_file_hash(user_id, stored_filename)
+            file_service.store_file_mapping(file_hash, user_id, stored_filename)
+            
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔗 Abrir Enlace", url=download_url)],
+                [InlineKeyboardButton("🗑️ Eliminar", callback_data=f"del_{file_hash}")]
+            ])
+
+            await progress_msg.edit_text(success_text, reply_markup=keyboard)
+
+        except Exception as button_error:
+            logger.error(f"Error con botones: {button_error}")
+            await progress_msg.edit_text(success_text)
+
+        logger.info(f"Archivo guardado: {stored_filename} para usuario {user_id}")
 
     except Exception as e:
-        logger.error(f"❌ Error procesando archivo: {e}", exc_info=True)
+        logger.error(f"Error procesando archivo: {e}", exc_info=True)
         try:
-            await message.reply_text("❌ Error al procesar el archivo.")
+            await message.reply_text("Error al procesar el archivo.")
         except:
             pass
 
-async def start_file_progress(client, user_id, file_index):
-    """Inicia el progreso para un archivo específico"""
+async def delete_file_callback(client, callback_query):
+    """Maneja el callback de eliminar archivos individuales"""
     try:
-        async with progress_lock:
-            if user_id not in active_progress_messages:
+        data = callback_query.data
+        
+        if data.startswith("delete_"):
+            file_number_str = data.replace("delete_", "")
+            
+            if file_number_str == "all":
+                success, message = file_service.delete_all_files(callback_query.from_user.id)
+                if success:
+                    await callback_query.message.edit_text(f"**{message}**")
+                else:
+                    await callback_query.message.edit_text(f"**{message}**")
+                await callback_query.answer()
                 return
             
-            progress_data = active_progress_messages[user_id]
-            if file_index >= len(progress_data['files_queue']):
+            try:
+                file_number = int(file_number_str)
+            except ValueError:
+                await callback_query.answer("Número de archivo inválido", show_alert=True)
                 return
             
-            current_file = progress_data['files_queue'][file_index]
-            progress_data['current_file_index'] = file_index
+            user_id = callback_query.from_user.id
             
-            # Crear mensaje inicial para este archivo
-            initial_message = progress_service.create_individual_progress_message(
-                filename=current_file['filename'],
-                current=0,
-                total=current_file['size'],
-                speed=0,
-                file_num=file_index + 1,
-                total_files=progress_data['total_files'],
-                eta_text="calculando..."
+            file_info = file_service.get_file_by_number(user_id, file_number)
+            if not file_info:
+                await callback_query.answer("Archivo no encontrado", show_alert=True)
+                return
+            
+            confirm_keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Sí, eliminar", callback_data=f"confirm_delete_{file_number}"),
+                    InlineKeyboardButton("❌ Cancelar", callback_data="cancel_delete")
+                ]
+            ])
+            
+            await callback_query.message.edit_text(
+                f"**¿Eliminar archivo #{file_number}?**\n\n"
+                f"**Archivo:** `{file_info['original_name']}`\n\n"
+                f"Esta acción no se puede deshacer.",
+                reply_markup=confirm_keyboard
             )
             
-            current_file['message'] = await client.send_message(user_id, initial_message)
-            logger.info(f"🚀 Iniciando progreso para archivo {file_index + 1}: {current_file['filename']}")
+        elif data.startswith("confirm_delete_"):
+            file_number = int(data.replace("confirm_delete_", ""))
+            user_id = callback_query.from_user.id
             
-    except Exception as e:
-        logger.error(f"❌ Error iniciando progreso: {e}")
-
-async def mark_file_completed_and_continue(client, user_id, filename, success, 
-                                         stored_filename=None, size_mb=None, download_url=None):
-    """Marca un archivo como completado y pasa al siguiente"""
-    try:
-        async with progress_lock:
-            if user_id not in active_progress_messages:
-                return
-            
-            progress_data = active_progress_messages[user_id]
-            
-            # Encontrar y marcar el archivo como completado
-            for i, file_data in enumerate(progress_data['files_queue']):
-                if file_data['filename'] == filename:
-                    file_data['completed'] = True
-                    
-                    # Si fue exitoso, mostrar mensaje de éxito
-                    if success and file_data['message'] and stored_filename:
-                        # Obtener número de archivo que ve el usuario
-                        files_list = file_service.list_user_files(user_id)
-                        current_file_number = None
-                        for file_info in files_list:
-                            if file_info['stored_name'] == stored_filename:
-                                current_file_number = file_info['number']
-                                break
-                        
-                        success_text = progress_service.create_success_message(
-                            filename=filename,
-                            file_number=current_file_number,
-                            size_mb=size_mb,
-                            download_url=download_url,
-                            file_num=i + 1,
-                            total_files=progress_data['total_files']
-                        )
-                        try:
-                            await file_data['message'].edit_text(success_text, disable_web_page_preview=True)
-                        except Exception as e:
-                            logger.error(f"❌ Error mostrando éxito: {e}")
-                    
-                    logger.info(f"✅ Archivo '{filename}' marcado como completado")
-                    break
-            
-            # Verificar si hay más archivos en la cola
-            current_index = progress_data['current_file_index']
-            next_index = current_index + 1
-            
-            if next_index < len(progress_data['files_queue']):
-                # Pasar al siguiente archivo
-                await start_file_progress(client, user_id, next_index)
+            success, message = file_service.delete_file_by_number(user_id, file_number)
+            if success:
+                await callback_query.message.edit_text(f"**{message}**")
             else:
-                # Todos los archivos completados - limpiar
-                logger.info(f"🎉 Todos los archivos completados para usuario {user_id}")
-                del active_progress_messages[user_id]
-                
+                await callback_query.message.edit_text(f"**{message}**")
+            
+        elif data == "cancel_delete":
+            await callback_query.message.edit_text("**Eliminación cancelada.**")
+        
+        await callback_query.answer()
+        
     except Exception as e:
-        logger.error(f"❌ Error en mark_file_completed_and_continue: {e}")
+        logger.error(f"Error eliminando archivo: {e}")
+        await callback_query.answer("Error eliminando archivo", show_alert=True)
+
+async def clear_packed_callback(client, callback_query):
+    """Maneja el callback para vaciar la carpeta empaquetada"""
+    try:
+        user_id = callback_query.from_user.id
+        
+        confirm_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Sí, eliminar todo", callback_data=f"confirm_clear_packed_{user_id}"),
+                InlineKeyboardButton("❌ Cancelar", callback_data="cancel_clear")
+            ]
+        ])
+        
+        await callback_query.message.edit_text(
+            "**¿Eliminar TODOS los archivos empaquetados?**\n\n"
+            "Esta acción no se puede deshacer.",
+            reply_markup=confirm_keyboard
+        )
+        await callback_query.answer()
+        
+    except Exception as e:
+        logger.error(f"Error en clear_packed_callback: {e}")
+        await callback_query.answer("Error", show_alert=True)
+
+async def confirm_clear_packed_callback(client, callback_query):
+    """Maneja la confirmación para vaciar la carpeta empaquetada"""
+    try:
+        data = callback_query.data.replace("confirm_clear_packed_", "")
+        user_id = int(data)
+        
+        if callback_query.from_user.id != user_id:
+            await callback_query.answer("No puedes realizar esta acción", show_alert=True)
+            return
+        
+        success, message = packing_service.clear_packed_folder(user_id)
+        
+        if success:
+            await callback_query.message.edit_text(f"**{message}**")
+        else:
+            await callback_query.message.edit_text(f"**{message}**")
+            
+        await callback_query.answer()
+        
+    except Exception as e:
+        logger.error(f"Error en confirm_clear_packed_callback: {e}")
+        await callback_query.answer("Error al eliminar archivos", show_alert=True)
+
+async def cancel_clear_callback(client, callback_query):
+    """Maneja la cancelación de limpieza"""
+    try:
+        await callback_query.message.edit_text("**Operación cancelada.**")
+        await callback_query.answer("Operación cancelada")
+    except Exception as e:
+        logger.error(f"Error en cancel_clear_callback: {e}")
