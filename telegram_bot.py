@@ -4,11 +4,7 @@ import sys
 from pyrogram import Client, filters
 
 from config import API_ID, API_HASH, BOT_TOKEN
-from telegram_handlers import (
-    start_command, help_command, status_command,
-    cd_command, list_command, delete_command, clear_command, rename_command,
-    pack_command, yt_command, handle_file, setup_handlers
-)
+from telegram_handlers import setup_handlers
 
 logger = logging.getLogger(__name__)
 
@@ -19,29 +15,7 @@ class TelegramBot:
 
     async def setup_handlers(self):
         """Configura todos los handlers del bot (sin callbacks)"""
-        # Comandos básicos
-        self.client.on_message(filters.command("start") & filters.private)(start_command)
-        self.client.on_message(filters.command("help") & filters.private)(help_command)
-        self.client.on_message(filters.command("status") & filters.private)(status_command)
-        
-        # Sistema de carpetas
-        self.client.on_message(filters.command("cd") & filters.private)(cd_command)
-        self.client.on_message(filters.command("list") & filters.private)(list_command)
-        self.client.on_message(filters.command("delete") & filters.private)(delete_command)
-        self.client.on_message(filters.command("clear") & filters.private)(clear_command)
-        self.client.on_message(filters.command("rename") & filters.private)(rename_command)
-        
-        # Empaquetado
-        self.client.on_message(filters.command("pack") & filters.private)(pack_command)
-        
-        # YouTube
-        self.client.on_message(filters.command("yt") & filters.private)(yt_command)
-        
-        # Archivos (sin botones)
-        self.client.on_message(
-            (filters.document | filters.video | filters.audio | filters.photo) &
-            filters.private
-        )(handle_file)
+        setup_handlers(self.client)
 
     async def start_bot(self):
         """Inicia el bot de Telegram"""
