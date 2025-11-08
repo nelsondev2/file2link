@@ -154,6 +154,45 @@ class FileService:
         
         return files
 
+    def list_packed_files(self, user_id):
+        """Lista archivos empaquetados del usuario"""
+        packed_dir = os.path.join(BASE_DIR, str(user_id), "packed")
+        files = []
+        
+        if not os.path.exists(packed_dir):
+            return files
+        
+        user_key = f"{user_id}_packed"
+        if user_key not in self.metadata:
+            return files
+        
+        # Obtener archivos existentes y ordenar por número
+        existing_files = []
+        for file_num, file_data in self.metadata[user_key]["files"].items():
+            file_path = os.path.join(packed_dir, file_data["stored_name"])
+            if os.path.exists(file_path):
+                existing_files.append((int(file_num), file_data))
+        
+        # Ordenar por número y reasignar números secuenciales
+        existing_files.sort(key=lambda x: x[0])
+        
+        for new_number, (old_number, file_data) in enumerate(existing_files, 1):
+            file_path = os.path.join(packed_dir, file_data["stored_name"])
+            if os.path.isfile(file_path):
+                size = os.path.getsize(file_path)
+                download_url = self.create_packed_url(user_id, file_data["stored_name"])
+                files.append({
+                    'number': new_number,
+                    'original_number': old_number,
+                    'name': file_data["original_name"],
+                    'stored_name': file_data["stored_name"],
+                    'size': size,
+                    'size_mb': size / (1024 * 1024),
+                    'url': download_url
+                })
+        
+        return files
+
     def register_file(self, user_id, original_name, stored_name, file_type="download"):
         """Registra un archivo en la metadata"""
         user_key = f"{user_id}_{file_type}"
@@ -175,58 +214,41 @@ class FileService:
         if user_key not in self.metadata:
             return None
         
-        file_data = None
-        original_number = None
-        
-        # Para archivos descargados, usar list_user_files
         if file_type == "download":
             files_list = self.list_user_files(user_id)
-            for file_info in files_list:
-                if file_info['number'] == file_number:
-                    original_number = file_info['original_number']
-                    file_data = self.metadata[user_key]["files"].get(str(original_number))
-                    break
         else:
-            # Para archivos empaquetados, buscar por número secuencial
-            files_list = []
-            packed_dir = os.path.join(BASE_DIR, str(user_id), "packed")
-            if os.path.exists(packed_dir):
-                file_list = os.listdir(packed_dir)
-                for i, filename in enumerate(file_list, 1):
-                    files_list.append({
-                        'number': i,
-                        'name': filename
-                    })
-            
-            # Buscar el archivo por número mostrado
-            for file_info in files_list:
-                if file_info['number'] == file_number:
-                    file_data = self.metadata[user_key]["files"].get(str(file_number))
-                    original_number = file_number
-                    break
+            files_list = self.list_packed_files(user_id)
         
-        if not file_data:
-            return None
+        # Buscar el archivo por número mostrado
+        for file_info in files_list:
+            if file_info['number'] == file_number:
+                original_number = file_info['original_number']
+                file_data = self.metadata[user_key]["files"].get(str(original_number))
+                
+                if not file_data:
+                    return None
+                
+                user_dir = os.path.join(BASE_DIR, str(user_id), file_type)
+                file_path = os.path.join(user_dir, file_data["stored_name"])
+                
+                if not os.path.exists(file_path):
+                    return None
+                
+                if file_type == "download":
+                    download_url = self.create_download_url(user_id, file_data["stored_name"])
+                else:
+                    download_url = self.create_packed_url(user_id, file_data["stored_name"])
+                
+                return {
+                    'number': file_number,
+                    'original_number': original_number,
+                    'original_name': file_data["original_name"],
+                    'stored_name': file_data["stored_name"],
+                    'path': file_path,
+                    'url': download_url
+                }
         
-        user_dir = os.path.join(BASE_DIR, str(user_id), file_type)
-        file_path = os.path.join(user_dir, file_data["stored_name"])
-        
-        if not os.path.exists(file_path):
-            return None
-        
-        if file_type == "download":
-            download_url = self.create_download_url(user_id, file_data["stored_name"])
-        else:
-            download_url = self.create_packed_url(user_id, file_data["stored_name"])
-        
-        return {
-            'number': file_number,
-            'original_number': original_number,
-            'original_name': file_data["original_name"],
-            'stored_name': file_data["stored_name"],
-            'path': file_path,
-            'url': download_url
-        }
+        return None
 
     def rename_file(self, user_id, file_number, new_name, file_type="download"):
         """Renombra un archivo"""
