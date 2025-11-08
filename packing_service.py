@@ -1,4 +1,3 @@
-# packing_service.py - AJUSTES FINALES
 import os
 import zipfile
 import time
@@ -23,7 +22,8 @@ class SimplePackingService:
                 return None, message
             
             try:
-                user_dir = file_service.get_user_directory(user_id, "download")
+                # CORREGIDO: usar "downloads" en lugar de "download"
+                user_dir = file_service.get_user_directory(user_id, "downloads")
                 if not os.path.exists(user_dir):
                     return None, "No tienes archivos para empaquetar"
                 
@@ -31,6 +31,7 @@ class SimplePackingService:
                 if not files:
                     return None, "No tienes archivos para empaquetar"
                 
+                # CORREGIDO: usar "packed" 
                 packed_dir = file_service.get_user_directory(user_id, "packed")
                 os.makedirs(packed_dir, exist_ok=True)
                 
