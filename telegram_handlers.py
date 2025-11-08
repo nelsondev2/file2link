@@ -14,20 +14,20 @@ from packing_service import packing_service
 
 logger = logging.getLogger(__name__)
 
-# Agregar un lock para sincronización
-progress_lock = asyncio.Lock()
-
 # Variable global para almacenar la carpeta actual por usuario
 user_current_dirs = {}
 
 # Variable global para almacenar mensajes de progreso activos
 active_progress_messages = {}
 
+# Lock para sincronización de progresos
+progress_lock = asyncio.Lock()
+
 async def start_command(client, message):
     """Maneja el comando /start"""
     try:
         user = message.from_user
-
+        
         welcome_text = f"""👋 **Bienvenido/a {user.first_name}!
 
 🤖 File2Link Bot - Gestión de Archivos**
@@ -96,7 +96,7 @@ async def cd_command(client, message):
     try:
         user_id = message.from_user.id
         command_parts = message.text.split()
-
+        
         if len(command_parts) < 2:
             await message.reply_text(
                 "**Uso:** `/cd carpeta`\n\n"
@@ -105,9 +105,9 @@ async def cd_command(client, message):
                 "• `packed` - Archivos empaquetados"
             )
             return
-
+        
         folder = command_parts[1].lower()
-
+        
         if folder not in ['download', 'packed']:
             await message.reply_text(
                 "**Carpeta no válida.**\n\n"
@@ -116,12 +116,12 @@ async def cd_command(client, message):
                 "• `packed` - Archivos empaquetados"
             )
             return
-
+        
         # Actualizar carpeta actual del usuario
         user_current_dirs[user_id] = folder
-
+        
         await message.reply_text(f"✅ **Cambiado a carpeta:** `{folder}`")
-
+        
     except Exception as e:
         logger.error(f"Error en /cd: {e}")
         await message.reply_text("Error al cambiar de carpeta.")
@@ -130,12 +130,12 @@ async def dir_command(client, message):
     """Maneja el comando /dir para ver la ruta actual"""
     try:
         user_id = message.from_user.id
-
+        
         # Obtener carpeta actual o usar 'download' por defecto
         current_dir = user_current_dirs.get(user_id, 'download')
-
+        
         await message.reply_text(f"📁 **Ruta actual:** `/static/{user_id}/{current_dir}/`")
-
+        
     except Exception as e:
         logger.error(f"Error en /dir: {e}")
         await message.reply_text("Error al obtener ruta actual.")
@@ -144,24 +144,24 @@ async def list_command(client, message):
     """Maneja el comando /list para listar archivos"""
     try:
         user_id = message.from_user.id
-
+        
         # Obtener carpeta actual o usar 'download' por defecto
         current_dir = user_current_dirs.get(user_id, 'download')
-
+        
         if current_dir == 'download':
             files = file_service.list_user_files(user_id)
         else:
             files = file_service.list_packed_files(user_id)
-
+        
         if not files:
             await message.reply_text(
                 f"**No hay archivos en la carpeta `{current_dir}`.**\n\n"
                 "Usa `/cd download` o `/cd packed` para cambiar de carpeta."
             )
             return
-
+        
         files_text = f"**📁 Archivos en `{current_dir}` ({len(files)}):**\n\n"
-
+        
         for file_info in files:
             files_text += f"**{file_info['number']}.** `{file_info['name']}` ({file_info['size_mb']:.1f} MB)\n"
             files_text += f"🔗 [Descargar]({file_info['url']})\n\n"
@@ -182,16 +182,16 @@ async def files_command(client, message):
     try:
         user_id = message.from_user.id
         files = file_service.list_user_files(user_id)
-
+        
         if not files:
             await message.reply_text(
                 "No tienes archivos almacenados.\n\n"
                 "¡Envía tu primer archivo para comenzar!"
             )
             return
-
+        
         files_text = f"**Tus Archivos ({len(files)}):**\n\n"
-
+        
         for file_info in files:
             files_text += f"**{file_info['number']}.** `{file_info['name']}` ({file_info['size_mb']:.1f} MB)\n"
             files_text += f"🔗 [Descargar]({file_info['url']})\n\n"
@@ -214,9 +214,9 @@ async def status_command(client, message):
         files = file_service.list_user_files(user_id)
         total_size = file_service.get_user_storage_usage(user_id)
         size_mb = total_size / (1024 * 1024)
-
+        
         system_status = load_manager.get_status()
-
+        
         status_text = f"""**Estado del Sistema - {message.from_user.first_name}**
 
 **Usuario:** {user_id}
@@ -228,9 +228,9 @@ async def status_command(client, message):
 • **Uso de CPU:** {system_status['cpu_percent']:.1f}%
 • **Uso de Memoria:** {system_status['memory_percent']:.1f}%
 • **Estado:** {"✅ ACEPTANDO TRABAJO" if system_status['can_accept_work'] else "⚠️ SOBRECARGADO"}"""
-
+        
         await message.reply_text(status_text)
-
+        
     except Exception as e:
         logger.error(f"Error en /status: {e}")
         await message.reply_text("Error al obtener estado.")
@@ -240,7 +240,7 @@ async def pack_command(client, message):
     try:
         user_id = message.from_user.id
         command_parts = message.text.split()
-
+        
         system_status = load_manager.get_status()
         if not system_status['can_accept_work']:
             await message.reply_text(
@@ -250,7 +250,7 @@ async def pack_command(client, message):
                 f"""Intenta nuevamente en unos minutos."""
             )
             return
-
+        
         split_size = None
         if len(command_parts) > 1:
             try:
@@ -264,46 +264,129 @@ async def pack_command(client, message):
             except ValueError:
                 await message.reply_text("Formato incorrecto. Usa: `/pack` o `/pack 100`")
                 return
-
+        
         status_msg = await message.reply_text(
             "**Iniciando empaquetado...**\n\n"
             "Uniendo todos tus archivos en un ZIP..."
         )
-                                                              def run_simple_packing():                                 try:                                                      files, status_message = packing_service.pack_folder(user_id, split_size)
+        
+        def run_simple_packing():
+            try:
+                files, status_message = packing_service.pack_folder(user_id, split_size)
                 return files, status_message
-            except Exception as e:                                    logger.error(f"Error en empaquetado: {e}")                                                                  return None, f"Error al empaquetar: {str(e)}"                                                                                                             with concurrent.futures.ThreadPoolExecutor() as executor:                                                       future = executor.submit(run_simple_packing)                                                                files, status_message = future.result(timeout=300)                                                                                                            if not files:                                             await status_msg.edit_text(status_message)            return                                                                                                  if len(files) == 1:                                       file_info = files[0]                                  total_files_info = f" ({file_info['total_files']} archivos)" if 'total_files' in file_info else ""                                                                                                                      response_text = f"""**Empaquetado Completado{total_files_info}**                                                                                      **Archivo #{file_info['number']}:** `{file_info['filename']}`                                               **Tamaño:** {file_info['size_mb']:.1f} MB                                                                   **Enlace de Descarga:**                               📎 [{file_info['filename']}]({file_info['url']})                                                            **Al descargar:** Descomprime el ZIP para obtener todos tus archivos"""                                                                                                       await status_msg.edit_text(                               response_text,                                        disable_web_page_preview=True                     )                                                                                                       else:                                                     total_files = 0                                       for file_info in files:                                   if 'total_files' in file_info:                            total_files = file_info['total_files']                                                                      break                                                                                               total_files_info = f" ({total_files} archivos)" if total_files > 0 else ""                                                                                        response_text = f"""**Empaquetado Completado{total_files_info}**                                                                                      **Archivos Generados:** {len(files)} partes           **Tamaño Total:** {sum(f['size_mb'] for f in files):.1f} MB                                                                                                       **Enlaces de Descarga:**                              """                                                                                                                     for file_info in files:                                   response_text += f"\n**Parte {file_info['number']}:** 📎 [{file_info['filename']}]({file_info['url']})"                                                                                                             response_text += "\n\n**Al descargar:** Descarga todas las partes y descomprime el ZIP"                                                                           if len(response_text) > 4000:                             await status_msg.edit_text("**Empaquetado completado**\n\nLos enlaces se enviarán en varios mensajes...")                                                                                                               for file_info in files:                                   part_text = f"**Parte {file_info['number']}:** 📎 [{file_info['filename']}]({file_info['url']})"                                                                  await message.reply_text(part_text, disable_web_page_preview=True)                                  else:                                                     await status_msg.edit_text(                               response_text,                                        disable_web_page_preview=True                     )                                                                                                   logger.info(f"Empaquetado completado para usuario {user_id}: {len(files)} archivos")                                                                          except concurrent.futures.TimeoutError:                   await status_msg.edit_text("El empaquetado tardó demasiado tiempo. Intenta con menos archivos.")        except Exception as e:                                    logger.error(f"Error en comando /pack: {e}")          await message.reply_text("Error en el proceso de empaquetado.")                                                                                           async def rename_command(client, message):
-    """Maneja el comando /rename"""                       try:                                                      user_id = message.from_user.id                        command_parts = message.text.split(maxsplit=2)                                                              if len(command_parts) < 3:
+            except Exception as e:
+                logger.error(f"Error en empaquetado: {e}")
+                return None, f"Error al empaquetar: {str(e)}"
+        
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_simple_packing)
+            files, status_message = future.result(timeout=300)
+        
+        if not files:
+            await status_msg.edit_text(status_message)
+            return
+        
+        if len(files) == 1:
+            file_info = files[0]
+            total_files_info = f" ({file_info['total_files']} archivos)" if 'total_files' in file_info else ""
+            
+            response_text = f"""**Empaquetado Completado{total_files_info}**
+
+**Archivo #{file_info['number']}:** `{file_info['filename']}`
+**Tamaño:** {file_info['size_mb']:.1f} MB
+
+**Enlace de Descarga:**
+📎 [{file_info['filename']}]({file_info['url']})
+
+**Al descargar:** Descomprime el ZIP para obtener todos tus archivos"""
+            
+            await status_msg.edit_text(
+                response_text, 
+                disable_web_page_preview=True
+            )
+            
+        else:
+            total_files = 0
+            for file_info in files:
+                if 'total_files' in file_info:
+                    total_files = file_info['total_files']
+                    break
+            
+            total_files_info = f" ({total_files} archivos)" if total_files > 0 else ""
+            
+            response_text = f"""**Empaquetado Completado{total_files_info}**
+
+**Archivos Generados:** {len(files)} partes
+**Tamaño Total:** {sum(f['size_mb'] for f in files):.1f} MB
+
+**Enlaces de Descarga:**
+"""
+            
+            for file_info in files:
+                response_text += f"\n**Parte {file_info['number']}:** 📎 [{file_info['filename']}]({file_info['url']})"
+            
+            response_text += "\n\n**Al descargar:** Descarga todas las partes y descomprime el ZIP"
+            
+            if len(response_text) > 4000:
+                await status_msg.edit_text("**Empaquetado completado**\n\nLos enlaces se enviarán en varios mensajes...")
+                
+                for file_info in files:
+                    part_text = f"**Parte {file_info['number']}:** 📎 [{file_info['filename']}]({file_info['url']})"
+                    await message.reply_text(part_text, disable_web_page_preview=True)
+            else:
+                await status_msg.edit_text(
+                    response_text, 
+                    disable_web_page_preview=True
+                )
+                
+        logger.info(f"Empaquetado completado para usuario {user_id}: {len(files)} archivos")
+        
+    except concurrent.futures.TimeoutError:
+        await status_msg.edit_text("El empaquetado tardó demasiado tiempo. Intenta con menos archivos.")
+    except Exception as e:
+        logger.error(f"Error en comando /pack: {e}")
+        await message.reply_text("Error en el proceso de empaquetado.")
+
+async def rename_command(client, message):
+    """Maneja el comando /rename"""
+    try:
+        user_id = message.from_user.id
+        command_parts = message.text.split(maxsplit=2)
+        
+        if len(command_parts) < 3:
             await message.reply_text("Formato incorrecto. Usa: `/rename número nuevo_nombre`")
             return
-
+        
         try:
             file_number = int(command_parts[1])
         except ValueError:
             await message.reply_text("El número debe ser un valor numérico válido.")
             return
-
+        
         new_name = command_parts[2].strip()
-
+        
         if not new_name:
             await message.reply_text("El nuevo nombre no puede estar vacío.")
             return
-
+        
         # Obtener carpeta actual para determinar tipo de archivo
         current_dir = user_current_dirs.get(user_id, 'download')
         file_type = current_dir
-
+        
         success, result_message, new_url = file_service.rename_file(user_id, file_number, new_name, file_type)
-                                                              if success:
+        
+        if success:
             response_text = f"**{result_message}**\n\n"
             response_text += f"**Nuevo enlace:**\n"
-            response_text += f"📎 [{new_name}]({new_url})"                                                  
+            response_text += f"📎 [{new_name}]({new_url})"
+            
             await message.reply_text(
                 response_text,
                 disable_web_page_preview=True
             )
         else:
             await message.reply_text(f"**{result_message}**")
-
+            
     except Exception as e:
         logger.error(f"Error en comando /rename: {e}")
         await message.reply_text("Error al renombrar archivo.")
@@ -313,39 +396,41 @@ async def delete_command(client, message):
     try:
         user_id = message.from_user.id
         command_parts = message.text.split()
-
-        if len(command_parts) == 1:                               # Eliminar todos los archivos (confirmación)
+        
+        if len(command_parts) == 1:
+            # Eliminar todos los archivos (confirmación)
             confirm_text = """**¿Eliminar TODOS los archivos?**
 
 **Esta acción:**
 • Eliminará todos tus archivos
-• No se puede deshacer                                • Los enlaces dejarán de funcionar
+• No se puede deshacer
+• Los enlaces dejarán de funcionar
 
 **Para confirmar:** `/delete confirm`"""
-
+            
             await message.reply_text(confirm_text)
             return
-
+        
         if command_parts[1] == "confirm":
             # Eliminar todos los archivos
             success, result_message = file_service.delete_all_files(user_id)
             await message.reply_text(f"**{result_message}**")
             return
-
+        
         # Eliminar archivo específico
         try:
             file_number = int(command_parts[1])
         except ValueError:
             await message.reply_text("Formato incorrecto. Usa: `/delete número` o `/delete` para eliminar todo")
             return
-
+        
         # Obtener carpeta actual para determinar tipo de archivo
         current_dir = user_current_dirs.get(user_id, 'download')
         file_type = current_dir
-
+        
         success, result_message = file_service.delete_file_by_number(user_id, file_number, file_type)
         await message.reply_text(f"**{result_message}**")
-
+            
     except Exception as e:
         logger.error(f"Error en comando /delete: {e}")
         await message.reply_text("Error al eliminar archivo.")
@@ -475,7 +560,7 @@ async def handle_file(client, message):
                                 eta_text = "calculando..."
                             
                             # Mensaje de progreso individual
-                            progress_message = create_individual_progress_message(
+                            progress_message = progress_service.create_individual_progress_message(
                                 filename=current_file['filename'],
                                 current=current,
                                 total=total,
@@ -548,7 +633,7 @@ async def start_file_progress(client, user_id, file_index):
             progress_data['current_file_index'] = file_index
             
             # Crear mensaje inicial para este archivo
-            initial_message = create_individual_progress_message(
+            initial_message = progress_service.create_individual_progress_message(
                 filename=current_file['filename'],
                 current=0,
                 total=current_file['size'],
@@ -581,9 +666,17 @@ async def mark_file_completed_and_continue(client, user_id, filename, success,
                     
                     # Si fue exitoso, mostrar mensaje de éxito
                     if success and file_data['message'] and stored_filename:
-                        success_text = create_success_message(
+                        # Obtener número de archivo que ve el usuario
+                        files_list = file_service.list_user_files(user_id)
+                        current_file_number = None
+                        for file_info in files_list:
+                            if file_info['stored_name'] == stored_filename:
+                                current_file_number = file_info['number']
+                                break
+                        
+                        success_text = progress_service.create_success_message(
                             filename=filename,
-                            stored_filename=stored_filename,
+                            file_number=current_file_number,
                             size_mb=size_mb,
                             download_url=download_url,
                             file_num=i + 1,
@@ -611,60 +704,3 @@ async def mark_file_completed_and_continue(client, user_id, filename, success,
                 
     except Exception as e:
         logger.error(f"❌ Error en mark_file_completed_and_continue: {e}")
-
-def create_individual_progress_message(filename, current, total, speed, file_num, total_files, eta_text):
-    """Crea mensaje de progreso individual para un archivo"""
-    # Barra de progreso (20 caracteres)
-    bar_length = 20
-    if total > 0:
-        filled_length = int(bar_length * current / total)
-        bar = '▰' * filled_length + '▱' * (bar_length - filled_length)
-        percent = min(100.0, float(current) * 100 / float(total))
-    else:
-        bar = '▱' * bar_length
-        percent = 0
-    
-    # Acortar nombre de archivo si es muy largo
-    if len(filename) > 25:
-        display_filename = filename[:22] + "..."
-    else:
-        display_filename = filename
-    
-    # Formatear bytes
-    def format_bytes(size):
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size < 1024.0:
-                return f"{size:.1f} {unit}"
-            size /= 1024.0
-        return f"{size:.1f} TB"
-    
-    # Mensaje de progreso individual
-    message = f"🔗 **FILE2LINK - DESCARGANDO**\n\n"
-    message += f"`📁 {bar} {percent:.1f}%`\n"
-    message += f"`📊 Progreso: {format_bytes(current)} / {format_bytes(total)}`\n"
-    message += f"`📦 Archivo: {file_num}/{total_files}`\n"
-    message += f"`⚡ Velocidad: {format_bytes(speed)}/s`\n"
-    message += f"`⏰ Tiempo estimado: ~{eta_text}`\n"
-    message += f"`📄 Archivo: {display_filename}`"
-    
-    return message
-
-def create_success_message(filename, stored_filename, size_mb, download_url, file_num, total_files):
-    """Crea mensaje de éxito para un archivo completado"""
-    # Obtener número de archivo que ve el usuario
-    files_list = file_service.list_user_files(user_id)
-    current_file_number = None
-    for file_info in files_list:
-        if file_info['stored_name'] == stored_filename:
-            current_file_number = file_info['number']
-            break
-    
-    message = f"**✅ Archivo {file_num}/{total_files} Completado**\n\n"
-    message += f"**Archivo #{current_file_number}:** `{filename}`\n"
-    message += f"**Tamaño:** {size_mb:.2f} MB\n"
-    message += f"**Enlace:** 📎 [{filename}]({download_url})"
-    
-    if file_num < total_files:
-        message += f"\n\n**⏳ Preparando siguiente archivo...**"
-    
-    return message
