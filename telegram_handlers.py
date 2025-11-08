@@ -186,6 +186,36 @@ async def list_command(client, message):
         logger.error(f"Error en /list: {e}")
         await message.reply_text("Error al listar archivos.")
 
+async def files_command(client, message):
+    """Maneja el comando /files (compatibilidad)"""
+    try:
+        user_id = message.from_user.id
+        files = file_service.list_user_files(user_id)
+        
+        if not files:
+            await message.reply_text(
+                "No tienes archivos almacenados.\n\n"
+                "¡Envía tu primer archivo para comenzar!"
+            )
+            return
+        
+        files_text = f"**Tus Archivos ({len(files)}):**\n\n"
+        
+        for file_info in files:
+            files_text += f"**{file_info['number']}.** `{file_info['name']}` ({file_info['size_mb']:.1f} MB)\n"
+            files_text += f"🔗 [Descargar]({file_info['url']})\n\n"
+
+        files_text += f"**Usa los números para gestionar archivos:**\n"
+        files_text += f"• Renombrar: `/rename número nuevo_nombre`\n"
+        files_text += f"• Eliminar: `/delete número`\n"
+        files_text += f"• Ver todos: `/list`"
+
+        await message.reply_text(files_text, disable_web_page_preview=True)
+
+    except Exception as e:
+        logger.error(f"Error en /files: {e}")
+        await message.reply_text("Error al listar archivos.")
+
 async def status_command(client, message):
     """Maneja el comando /status"""
     try:
@@ -348,7 +378,11 @@ async def rename_command(client, message):
             await message.reply_text("El nuevo nombre no puede estar vacío.")
             return
         
-        success, result_message, new_url = file_service.rename_file(user_id, file_number, new_name)
+        # Obtener carpeta actual para determinar tipo de archivo
+        current_dir = user_current_dirs.get(user_id, 'download')
+        file_type = current_dir
+        
+        success, result_message, new_url = file_service.rename_file(user_id, file_number, new_name, file_type)
         
         if success:
             response_text = f"**{result_message}**\n\n"
