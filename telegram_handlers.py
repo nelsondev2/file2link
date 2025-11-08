@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 # Variable global para almacenar la carpeta actual por usuario
 user_current_dirs = {}
 
+# Variable global para almacenar mensajes de progreso activos
+active_progress_messages = {}
+
 async def start_command(client, message):
     """Maneja el comando /start"""
     try:
@@ -132,7 +135,6 @@ async def dir_command(client, message):
     except Exception as e:
         logger.error(f"Error en /dir: {e}")
         await message.reply_text("Error al obtener ruta actual.")
-
 
 async def list_command(client, message):
     """Maneja el comando /list para listar archivos"""
@@ -430,13 +432,12 @@ async def delete_command(client, message):
         await message.reply_text("Error al eliminar archivo.")
 
 async def handle_file(client, message):
-    """Maneja la recepción de archivos"""
+    """Maneja la recepción de archivos con progreso unificado"""
     try:
         user = message.from_user
         user_id = user.id
 
         logger.info(f"Archivo recibido de {user_id}. Tipo de mensaje: {message.media}")
-        logger.debug(f"Objeto message completo: {message}")
 
         user_dir = file_service.get_user_directory(user_id)
 
@@ -496,49 +497,88 @@ async def handle_file(client, message):
         file_service.register_file(user_id, original_filename, stored_filename)
 
         start_time = time.time()
-        initial_message = progress_service.create_progress_message(
-            filename=original_filename,
-            current=0,
-            total=file_size,
-            speed=0,
-            file_num=1,
-            total_files=1,
-            user_id=user_id,
-            process_type="Descargando"
-        )
+        
+        # Inicializar o actualizar progreso unificado
+        if user_id not in active_progress_messages:
+            # Crear mensaje inicial de progreso unificado
+            initial_message = progress_service.create_unified_progress_message(
+                filename=original_filename,
+                current=0,
+                total=file_size,
+                speed=0,
+                file_num=1,
+                total_files=1,
+                user_id=user_id,
+                process_type="Descargando"
+            )
+            progress_msg = await message.reply_text(initial_message)
+            active_progress_messages[user_id] = {
+                'message': progress_msg,
+                'start_time': start_time,
+                'files': {original_filename: {'current': 0, 'total': file_size, 'completed': False}},
+                'last_update': 0
+            }
+        else:
+            # Agregar nuevo archivo al progreso existente
+            active_progress_messages[user_id]['files'][original_filename] = {
+                'current': 0, 
+                'total': file_size, 
+                'completed': False
+            }
 
-        progress_msg = await message.reply_text(initial_message)
+        progress_data = active_progress_messages[user_id]
 
-        progress_data = {'last_update': 0}
-
-        async def progress_callback(current, total, message, filename, user_id, start_time):
+        async def progress_callback(current, total, filename, user_id):
             try:
-                elapsed_time = time.time() - start_time
-                speed = current / elapsed_time if elapsed_time > 0 else 0
-
                 current_time = time.time()
                 last_update = progress_data.get('last_update', 0)
-
+                
+                # Actualizar progreso del archivo actual
+                progress_data['files'][filename]['current'] = current
+                progress_data['files'][filename]['total'] = total
+                
+                # Actualizar cada 2 segundos o cuando se complete
                 if current_time - last_update >= 2 or current == total:
-                    progress_message = progress_service.create_progress_message(
-                        filename=filename,
-                        current=current,
-                        total=total,
+                    # Calcular velocidad y progreso total
+                    total_current = sum(f['current'] for f in progress_data['files'].values())
+                    total_size = sum(f['total'] for f in progress_data['files'].values())
+                    elapsed_time = current_time - progress_data['start_time']
+                    speed = total_current / elapsed_time if elapsed_time > 0 else 0
+                    
+                    # Contar archivos completados y en progreso
+                    completed_files = sum(1 for f in progress_data['files'].values() if f['completed'])
+                    total_files = len(progress_data['files'])
+                    
+                    # Encontrar archivo actualmente en progreso
+                    current_file = filename
+                    for file_name, file_data in progress_data['files'].items():
+                        if not file_data['completed'] and file_data['current'] < file_data['total']:
+                            current_file = file_name
+                            break
+                    
+                    progress_message = progress_service.create_unified_progress_message(
+                        filename=current_file,
+                        current=total_current,
+                        total=total_size,
                         speed=speed,
-                        file_num=1,
-                        total_files=1,
+                        file_num=completed_files + 1,
+                        total_files=total_files,
                         user_id=user_id,
                         process_type="Descargando"
                     )
 
-                    await message.edit_text(progress_message)
+                    await progress_data['message'].edit_text(progress_message)
                     progress_data['last_update'] = current_time
+                    
+                    # Marcar como completado si es el caso
+                    if current == total:
+                        progress_data['files'][filename]['completed'] = True
 
             except Exception as e:
                 logger.error(f"Error en progress callback: {e}")
 
         async def update_progress(current, total):
-            await progress_callback(current, total, progress_msg, original_filename, user_id, start_time)
+            await progress_callback(current, total, original_filename, user_id)
 
         downloaded_path = await message.download(
             file_path,
@@ -546,7 +586,10 @@ async def handle_file(client, message):
         )
 
         if not downloaded_path:
-            await progress_msg.edit_text("Error al descargar el archivo.")
+            # Limpiar progreso en caso de error
+            if user_id in active_progress_messages:
+                del active_progress_messages[user_id]
+            await progress_data['message'].edit_text("Error al descargar el archivo.")
             return
 
         final_size = os.path.getsize(file_path)
@@ -561,23 +604,33 @@ async def handle_file(client, message):
                 current_file_number = file_info['number']
                 break
 
-        success_text = f"""**¡Archivo #{current_file_number} Almacenado!**
+        # Verificar si todos los archivos están completos
+        all_completed = all(f['completed'] for f in progress_data['files'].values())
+        
+        if all_completed:
+            success_text = f"""**✅ Subida Completa - {len(progress_data['files'])} Archivos**
 
-**Nombre:** `{original_filename}`
-**Tipo:** {file_type}
+**Último archivo procesado:**
+`#{current_file_number}` - `{original_filename}`
 **Tamaño:** {size_mb:.2f} MB
-
-**Enlace de Descarga:**
-📎 [{original_filename}]({download_url})
+**Enlace:** 📎 [{original_filename}]({download_url})
 
 **Usa `/list` para ver todos tus archivos.**"""
 
-        await progress_msg.edit_text(success_text, disable_web_page_preview=True)
+            await progress_data['message'].edit_text(success_text, disable_web_page_preview=True)
+            # Limpiar progreso completado
+            del active_progress_messages[user_id]
+        else:
+            # Solo actualizar el progreso, el mensaje final se mostrará cuando todos terminen
+            logger.info(f"Archivo {original_filename} completado, esperando otros archivos...")
 
         logger.info(f"Archivo guardado: {stored_filename} para usuario {user_id}")
 
     except Exception as e:
         logger.error(f"Error procesando archivo: {e}", exc_info=True)
+        # Limpiar progreso en caso de error
+        if user_id in active_progress_messages:
+            del active_progress_messages[user_id]
         try:
             await message.reply_text("Error al procesar el archivo.")
         except:
