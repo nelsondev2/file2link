@@ -555,10 +555,9 @@ async def process_file_queue(client, user_id):
             user_queues[user_id] = []
 
 async def process_single_file(client, message, user_id):
-    """Procesa un solo archivo con progreso actualizado"""
+    """Procesa un solo archivo con progreso actualizado - VERSIÓN CORREGIDA"""
     try:
-        user_dir = file_service.get_user_directory(user_id, "downloads")
-
+        # Obtener información del archivo - CORREGIDO
         file_obj = None
         file_type = None
         original_filename = None
@@ -567,48 +566,57 @@ async def process_single_file(client, message, user_id):
         if message.document:
             file_obj = message.document
             file_type = "documento"
-            original_filename = message.document.file_name or "archivo"
-            file_size = file_obj.file_size
+            original_filename = message.document.file_name or "archivo_sin_nombre"
+            file_size = file_obj.file_size or 0
         elif message.video:
             file_obj = message.video
             file_type = "video"
-            original_filename = message.video.file_name or "video.mp4"
-            file_size = file_obj.file_size
+            original_filename = message.video.file_name or "video_sin_nombre.mp4"
+            file_size = file_obj.file_size or 0
         elif message.audio:
             file_obj = message.audio
             file_type = "audio"
-            original_filename = message.audio.file_name or "audio.mp3"
-            file_size = file_obj.file_size
+            original_filename = message.audio.file_name or "audio_sin_nombre.mp3"
+            file_size = file_obj.file_size or 0
         elif message.photo:
-            file_obj = message.photo[-1]
+            file_obj = message.photo[-1]  # Foto de mayor calidad
             file_type = "foto"
-            original_filename = f"foto_{file_obj.file_id}.jpg"
-            file_size = file_obj.file_size
+            original_filename = f"foto_{message.id}.jpg"
+            file_size = file_obj.file_size or 0
         else:
-            logger.warning(f"Mensaje no contiene un tipo de archivo manejable: {message}")
+            logger.warning(f"Mensaje no contiene archivo manejable: {message.media}")
+            # Eliminar de la cola si no es un archivo válido
+            if user_id in user_queues and user_queues[user_id]:
+                user_queues[user_id].pop(0)
             return
 
         if not file_obj:
-            logger.error(f"No se pudo obtener el objeto de archivo")
+            logger.error("No se pudo obtener el objeto de archivo")
+            if user_id in user_queues and user_queues[user_id]:
+                user_queues[user_id].pop(0)
             await message.reply_text("❌ Error: No se pudo identificar el archivo.")
             return
 
+        # Crear directorio de usuario - CORREGIDO: usar "downloads" no "download"
+        user_dir = file_service.get_user_directory(user_id, "downloads")
+        
+        # Sanitizar y generar nombre único
         sanitized_name = file_service.sanitize_filename(original_filename)
-        file_number = file_service.get_next_file_number(user_id)
         
+        # Generar nombre único para evitar colisiones
         stored_filename = sanitized_name
-        
         counter = 1
-        base_stored_filename = stored_filename
+        base_name, ext = os.path.splitext(sanitized_name)
         file_path = os.path.join(user_dir, stored_filename)
+        
         while os.path.exists(file_path):
-            name_no_ext = os.path.splitext(base_stored_filename)[0]
-            ext = os.path.splitext(base_stored_filename)[1]
-            stored_filename = f"{name_no_ext}_{counter}{ext}"
+            stored_filename = f"{base_name}_{counter}{ext}"
             file_path = os.path.join(user_dir, stored_filename)
             counter += 1
 
-        file_service.register_file(user_id, original_filename, stored_filename)
+        # Registrar archivo ANTES de descargar
+        file_number = file_service.register_file(user_id, original_filename, stored_filename, "downloads")
+        logger.info(f"Archivo registrado: #{file_number} - {original_filename} -> {stored_filename}")
 
         start_time = time.time()
         
@@ -619,8 +627,8 @@ async def process_single_file(client, message, user_id):
                 current=0,
                 total=file_size,
                 speed=0,
-                file_num=len(user_queues[user_id]),
-                total_files=len(user_queues[user_id]),
+                file_num=len(user_queues[user_id]) if user_id in user_queues else 1,
+                total_files=len(user_queues[user_id]) if user_id in user_queues else 1,
                 user_id=user_id,
                 process_type="Descargando"
             )
@@ -640,7 +648,7 @@ async def process_single_file(client, message, user_id):
                 last_update = progress_data.get('last_update', 0)
 
                 if current_time - last_update >= 2 or current == total:
-                    queue_position = user_queues[user_id].index(message) + 1 if user_id in user_queues else 1
+                    queue_position = user_queues[user_id].index(message) + 1 if user_id in user_queues and user_queues[user_id] else 1
                     queue_total = len(user_queues[user_id]) if user_id in user_queues else 1
                     
                     progress_message = progress_service.create_progress_message(
@@ -660,30 +668,41 @@ async def process_single_file(client, message, user_id):
             except Exception as e:
                 logger.error(f"Error en progress callback: {e}")
 
-        # Descargar archivo
-        downloaded_path = await message.download(
-            file_path,
-            progress=progress_callback
-        )
+        # Descargar archivo - CORREGIDO: manejar mejor los errores
+        try:
+            downloaded_path = await message.download(
+                file_path,
+                progress=progress_callback
+            )
 
-        if not downloaded_path:
-            await progress_msg.edit_text("❌ Error al descargar el archivo.")
-            return
+            if not downloaded_path or not os.path.exists(file_path):
+                await progress_msg.edit_text("❌ Error: El archivo no se descargó correctamente.")
+                # Revertir registro si falla la descarga
+                if user_id in user_queues and user_queues[user_id]:
+                    user_queues[user_id].pop(0)
+                return
 
-        final_size = os.path.getsize(file_path)
-        size_mb = final_size / (1024 * 1024)
+            # Verificar que el archivo se descargó completamente
+            final_size = os.path.getsize(file_path)
+            if file_size > 0 and final_size != file_size:
+                logger.warning(f"Tamaño del archivo no coincide: esperado {file_size}, obtenido {final_size}")
 
-        download_url = file_service.create_download_url(user_id, stored_filename)
+            size_mb = final_size / (1024 * 1024)
 
-        # Mensaje final para el archivo actual
-        files_list = file_service.list_user_files(user_id, "downloads")
-        current_file_number = None
-        for file_info in files_list:
-            if file_info['stored_name'] == stored_filename:
-                current_file_number = file_info['number']
-                break
+            # Generar URL de descarga - CORREGIDO
+            download_url = file_service.create_download_url(user_id, stored_filename)
+            logger.info(f"URL generada: {download_url}")
 
-        success_text = f"""✅ **Archivo #{current_file_number} Almacenado!**
+            # Obtener número real del archivo
+            files_list = file_service.list_user_files(user_id, "downloads")
+            current_file_number = None
+            for file_info in files_list:
+                if file_info['stored_name'] == stored_filename:
+                    current_file_number = file_info['number']
+                    break
+
+            # Mensaje final de éxito
+            success_text = f"""✅ **Archivo #{current_file_number or file_number} Almacenado!**
 
 **Nombre:** `{original_filename}`
 **Tipo:** {file_type}
@@ -694,14 +713,25 @@ async def process_single_file(client, message, user_id):
 
 **Ubicación:** Carpeta `downloads`"""
 
-        # Si es el último archivo en la cola, mostrar mensaje final
-        if user_id in user_queues and len(user_queues[user_id]) <= 1:
-            await progress_msg.edit_text(success_text, disable_web_page_preview=True)
-        else:
-            # Solo actualizar el progreso, el mensaje final vendrá después
-            pass
+            # Si es el último archivo en la cola, mostrar mensaje final
+            if user_id in user_queues and len(user_queues[user_id]) <= 1:
+                await progress_msg.edit_text(success_text, disable_web_page_preview=True)
+                # Limpiar mensaje de progreso
+                if user_id in user_progress_msgs:
+                    del user_progress_msgs[user_id]
+            else:
+                # Solo actualizar el progreso para archivos en cola
+                await progress_msg.edit_text(success_text, disable_web_page_preview=True)
 
-        logger.info(f"Archivo guardado: {stored_filename} para usuario {user_id}")
+            logger.info(f"Archivo guardado exitosamente: {stored_filename} para usuario {user_id}")
+
+        except Exception as download_error:
+            logger.error(f"Error en descarga: {download_error}")
+            await progress_msg.edit_text(f"❌ Error al descargar el archivo: {str(download_error)}")
+        
+        # Finalmente, remover este mensaje de la cola
+        if user_id in user_queues and user_queues[user_id]:
+            user_queues[user_id].pop(0)
 
     except Exception as e:
         logger.error(f"Error procesando archivo individual: {e}", exc_info=True)
@@ -710,6 +740,9 @@ async def process_single_file(client, message, user_id):
                 await user_progress_msgs[user_id].edit_text(f"❌ Error procesando archivo: {str(e)}")
             except:
                 pass
+        # Asegurarse de remover de la cola incluso en error
+        if user_id in user_queues and user_queues[user_id]:
+            user_queues[user_id].pop(0)
 
 # ===== CONFIGURACIÓN DE HANDLERS =====
 
