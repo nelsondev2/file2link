@@ -1,3 +1,4 @@
+# packing_service.py - AJUSTES FINALES
 import os
 import zipfile
 import time
@@ -22,7 +23,7 @@ class SimplePackingService:
                 return None, message
             
             try:
-                user_dir = file_service.get_user_directory(user_id)
+                user_dir = file_service.get_user_directory(user_id, "download")
                 if not os.path.exists(user_dir):
                     return None, "No tienes archivos para empaquetar"
                 
@@ -30,7 +31,7 @@ class SimplePackingService:
                 if not files:
                     return None, "No tienes archivos para empaquetar"
                 
-                packed_dir = os.path.join(BASE_DIR, str(user_id), "packed")
+                packed_dir = file_service.get_user_directory(user_id, "packed")
                 os.makedirs(packed_dir, exist_ok=True)
                 
                 timestamp = int(time.time())
@@ -52,7 +53,7 @@ class SimplePackingService:
             return None, f"Error al empaquetar: {str(e)}"
     
     def _pack_single_simple(self, user_id, user_dir, packed_dir, base_filename):
-        """Empaqueta en un solo archivo ZIP SIN compresión - CORREGIDO"""
+        """Empaqueta en un solo archivo ZIP SIN compresión"""
         output_file = os.path.join(packed_dir, f"{base_filename}.zip")
         
         try:
@@ -104,7 +105,7 @@ class SimplePackingService:
             raise e
     
     def _pack_split_simple(self, user_id, user_dir, packed_dir, base_filename, split_size_mb):
-        """Empaqueta y divide en partes SIN compresión - CORREGIDO"""
+        """Empaqueta y divide en partes SIN compresión"""
         split_size_bytes = min(split_size_mb, self.max_part_size_mb) * 1024 * 1024
         
         try:
@@ -183,7 +184,7 @@ class SimplePackingService:
     def clear_packed_folder(self, user_id):
         """Elimina todos los archivos empaquetados del usuario"""
         try:
-            packed_dir = os.path.join(BASE_DIR, str(user_id), "packed")
+            packed_dir = file_service.get_user_directory(user_id, "packed")
             
             if not os.path.exists(packed_dir):
                 return False, "No tienes archivos empaquetados para eliminar"
@@ -198,11 +199,6 @@ class SimplePackingService:
                 if os.path.isfile(file_path):
                     os.remove(file_path)
                     deleted_count += 1
-            
-            user_key = f"{user_id}_packed"
-            if user_key in file_service.metadata:
-                file_service.metadata[user_key]["files"] = {}
-                file_service.save_metadata()
             
             return True, f"Se eliminaron {deleted_count} archivos empaquetados"
             
