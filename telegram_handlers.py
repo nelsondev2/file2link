@@ -434,7 +434,7 @@ async def pack_command(client, message):
         await message.reply_text("❌ Error en el proceso de empaquetado.")
 
 async def yt_command(client, message):
-    """Maneja el comando /yt - Descargar video de YouTube"""
+    """Maneja el comando /yt - Descargar video de YouTube con manejo robusto"""
     try:
         user_id = message.from_user.id
         args = message.text.split(maxsplit=1)
@@ -444,16 +444,13 @@ async def yt_command(client, message):
                 "❌ **Formato incorrecto.**\n\n"
                 "**Uso:** `/yt <url_de_youtube>`\n"
                 "**Ejemplo:** `/yt https://www.youtube.com/watch?v=ABCD1234`\n\n"
-                "**Características:**\n"
-                "• Descarga en calidad 360p MP4\n"
-                "• Máximo 200MB por video\n"
-                "• Tiempo máximo: 5 minutos"
+                "**Nota:** Algunos videos pueden estar restringidos por YouTube."
             )
             return
 
         url = args[1].strip()
         
-        # Verificar que el sistema puede aceptar trabajo
+        # Verificar carga del sistema
         system_status = load_manager.get_status()
         if not system_status['can_accept_work']:
             await message.reply_text(
@@ -464,20 +461,30 @@ async def yt_command(client, message):
             )
             return
 
-        # Enviar mensaje de inicio
+        # Mensaje de inicio
         status_msg = await message.reply_text(
-            "📥 **Iniciando descarga de YouTube...**\n\n"
+            "🎬 **Procesando solicitud de YouTube...**\n\n"
             "🔍 Obteniendo información del video..."
         )
 
-        # Realizar la descarga
+        # Realizar descarga
         success, result = await youtube_service.download_youtube_video(url, user_id)
 
         if not success:
-            await status_msg.edit_text(f"❌ **Error en descarga:** {result}")
+            error_message = result
+            
+            # Mensajes de error más específicos
+            if "bloqueado" in error_message.lower() or "bot" in error_message.lower():
+                error_message += "\n\n💡 **Sugerencia:** Intenta con otro video o espera unos minutos."
+            elif "privado" in error_message.lower() or "no disponible" in error_message.lower():
+                error_message += "\n\n💡 **Sugerencia:** El video puede ser privado o estar eliminado."
+            elif "tiempo" in error_message.lower():
+                error_message += "\n\n💡 **Sugerencia:** El video es muy largo o hay problemas de conexión."
+            
+            await status_msg.edit_text(f"❌ **Error:** {error_message}")
             return
 
-        # Éxito - mostrar información del archivo
+        # Éxito - mostrar información
         video_info = result
         duration_str = ""
         if video_info['duration'] > 0:
@@ -498,12 +505,16 @@ async def yt_command(client, message):
 
         await status_msg.edit_text(success_text, disable_web_page_preview=True)
         
-        logger.info(f"Descarga de YouTube completada para usuario {user_id}: {video_info['filename']}")
+        logger.info(f"✅ Descarga YouTube exitosa para {user_id}: {video_info['filename']}")
 
     except Exception as e:
-        logger.error(f"Error en comando /yt: {e}")
+        logger.error(f"❌ Error en comando /yt: {e}")
         try:
-            await message.reply_text("❌ Error al procesar la descarga de YouTube.")
+            await message.reply_text(
+                "❌ **Error interno del sistema.**\n\n"
+                "El servicio de YouTube puede estar experimentando problemas temporales. "
+                "Intenta nuevamente en unos minutos."
+            )
         except:
             pass
 
@@ -566,6 +577,31 @@ async def clear_queue_command(client, message):
         logger.error(f"Error en /clearqueue: {e}")
         await message.reply_text("❌ Error al limpiar la cola.")
 
+# ===== COMANDO CLEANUP =====
+
+async def cleanup_command(client, message):
+    """Limpia archivos temporales y optimiza el sistema"""
+    try:
+        status_msg = await message.reply_text("🧹 **Limpiando archivos temporales...**")
+        
+        # Limpiar temporales de YouTube
+        youtube_service.cleanup_temp_files()
+        
+        # Obtener estadísticas de espacio
+        total_size = file_service.get_user_storage_usage(message.from_user.id)
+        size_mb = total_size / (1024 * 1024)
+        
+        await status_msg.edit_text(
+            f"✅ **Limpieza completada**\n\n"
+            f"• Archivos temporales eliminados\n"
+            f"• Espacio usado: {size_mb:.2f} MB\n"
+            f"• Sistema optimizado"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error en comando cleanup: {e}")
+        await message.reply_text("❌ Error durante la limpieza.")
+
 # ===== MANEJO DE ARCHIVOS CON COLA MEJORADO =====
 
 async def handle_file(client, message):
@@ -575,6 +611,28 @@ async def handle_file(client, message):
         user_id = user.id
 
         logger.info(f"📥 Archivo recibido de {user_id} - Agregando a cola")
+
+        # Validar tamaño máximo del archivo (500MB)
+        MAX_FILE_SIZE = 500 * 1024 * 1024  # 500MB
+        
+        file_size = 0
+        if message.document:
+            file_size = message.document.file_size or 0
+        elif message.video:
+            file_size = message.video.file_size or 0
+        elif message.audio:
+            file_size = message.audio.file_size or 0
+        elif message.photo:
+            file_size = message.photo[-1].file_size or 0
+
+        if file_size > MAX_FILE_SIZE:
+            await message.reply_text(
+                "❌ **Archivo demasiado grande**\n\n"
+                f"**Tamaño máximo permitido:** 500 MB\n"
+                f"**Tu archivo:** {file_service.format_bytes(file_size)}\n\n"
+                "Por favor, divide el archivo en partes más pequeñas."
+            )
+            return
 
         # Inicializar cola del usuario si no existe
         if user_id not in user_queues:
@@ -621,8 +679,9 @@ async def process_file_queue(client, user_id):
         if user_id in user_queues:
             user_queues[user_id] = []
 
-async def process_single_file(client, message, user_id):
-    """Procesa un solo archivo con progreso actualizado - VERSIÓN COMPLETAMENTE CORREGIDA"""
+async def process_single_file(client, message, user_id, retry_count=0):
+    """Procesa un solo archivo con progreso actualizado - VERSIÓN CON REINTENTOS"""
+    max_retries = 2
     try:
         # Obtener información del archivo
         file_obj = None
@@ -752,11 +811,17 @@ async def process_single_file(client, message, user_id):
             )
 
             if not downloaded_path or not os.path.exists(file_path):
-                await progress_msg.edit_text("❌ Error: El archivo no se descargó correctamente.")
-                # Revertir registro si falla la descarga
-                if user_id in user_queues and user_queues[user_id]:
-                    user_queues[user_id].pop(0)
-                return
+                if retry_count < max_retries:
+                    logger.warning(f"Reintentando descarga (intento {retry_count + 1})")
+                    await asyncio.sleep(2)
+                    await process_single_file(client, message, user_id, retry_count + 1)
+                    return
+                else:
+                    await progress_msg.edit_text("❌ Error: El archivo no se descargó correctamente después de varios intentos.")
+                    # Revertir registro si falla la descarga
+                    if user_id in user_queues and user_queues[user_id]:
+                        user_queues[user_id].pop(0)
+                    return
 
             # Verificar que el archivo se descargó completamente
             final_size = os.path.getsize(file_path)
@@ -802,7 +867,13 @@ async def process_single_file(client, message, user_id):
 
         except Exception as download_error:
             logger.error(f"❌ Error en descarga: {download_error}", exc_info=True)
-            await progress_msg.edit_text(f"❌ Error al descargar el archivo: {str(download_error)}")
+            if retry_count < max_retries:
+                logger.info(f"Reintentando descarga (intento {retry_count + 1})")
+                await asyncio.sleep(2)
+                await process_single_file(client, message, user_id, retry_count + 1)
+                return
+            else:
+                await progress_msg.edit_text(f"❌ Error al descargar el archivo después de {max_retries + 1} intentos: {str(download_error)}")
         
         # FINALMENTE: Remover este mensaje de la cola y procesar el siguiente
         if user_id in user_queues and user_queues[user_id]:
@@ -862,9 +933,12 @@ def setup_handlers(client):
     # YouTube
     client.on_message(filters.command("yt") & filters.private)(yt_command)
     
-    # Gestión de cola (nuevos comandos)
+    # Gestión de cola
     client.on_message(filters.command("queue") & filters.private)(queue_command)
     client.on_message(filters.command("clearqueue") & filters.private)(clear_queue_command)
+    
+    # Limpieza
+    client.on_message(filters.command("cleanup") & filters.private)(cleanup_command)
     
     # Archivos (sin botones)
     client.on_message(
