@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 # ===== SISTEMA DE SESIÓN POR USUARIO =====
 user_sessions = {}  # {user_id: {'current_folder': 'downloads'}}
 user_queues = {}    # {user_id: [message1, message2, ...]}
-user_progress_msgs = {}  # {user_id: progress_message}
+user_progress_msgs = {}  # {user_id: {message_id: progress_message}}
+user_current_processing = {}  # {user_id: current_message_id}
 
 def get_user_session(user_id):
     """Obtiene o crea la sesión del usuario"""
@@ -55,6 +56,10 @@ async def start_command(client, message):
 **🎬 YOUTUBE:**
 `/yt <url>` - Descargar video (360p MP4)
 
+**🔄 GESTIÓN DE COLA:**
+`/queue` - Ver archivos en cola de descarga
+`/clearqueue` - Limpiar cola de descarga
+
 **🔍 INFORMACIÓN:**
 `/status` - Estado del sistema
 `/help` - Ayuda completa
@@ -90,6 +95,10 @@ async def help_command(client, message):
 **🎬 YOUTUBE:**
 `/yt <url>` - Descargar video de YouTube (360p MP4)
 
+**🔄 GESTIÓN DE COLA:**
+`/queue` - Ver archivos en cola de descarga
+`/clearqueue` - Limpiar cola de descarga
+
 **🔍 INFORMACIÓN:**
 `/status` - Estado del sistema
 `/help` - Esta ayuda
@@ -100,7 +109,8 @@ async def help_command(client, message):
 `/delete 5`
 `/rename 3 mi_documento`
 `/pack 100`
-`/yt https://youtube.com/watch?v=...`"""
+`/yt https://youtube.com/watch?v=...`
+`/queue` - Ver qué archivos están en cola"""
 
         await message.reply_text(help_text)
 
@@ -497,15 +507,74 @@ async def yt_command(client, message):
         except:
             pass
 
-# ===== MANEJO DE ARCHIVOS CON COLA =====
+# ===== GESTIÓN DE COLA =====
+
+async def queue_command(client, message):
+    """Maneja el comando /queue - Ver estado de la cola de descargas"""
+    try:
+        user_id = message.from_user.id
+        
+        if user_id not in user_queues or not user_queues[user_id]:
+            await message.reply_text("📭 **Cola vacía**\n\nNo hay archivos en cola de descarga.")
+            return
+        
+        queue_size = len(user_queues[user_id])
+        current_processing = "Sí" if user_id in user_current_processing else "No"
+        
+        queue_text = f"📋 **Estado de la Cola - {queue_size} archivo(s)**\n\n"
+        
+        for i, msg in enumerate(user_queues[user_id]):
+            file_info = "Desconocido"
+            if msg.document:
+                file_info = f"📄 {msg.document.file_name or 'Documento sin nombre'}"
+            elif msg.video:
+                file_info = f"🎥 {msg.video.file_name or 'Video sin nombre'}"
+            elif msg.audio:
+                file_info = f"🎵 {msg.audio.file_name or 'Audio sin nombre'}"
+            elif msg.photo:
+                file_info = f"🖼️ Foto"
+            
+            queue_text += f"**#{i+1}** - {file_info}\n"
+        
+        queue_text += f"\n**Procesando actualmente:** {current_processing}"
+        
+        await message.reply_text(queue_text)
+        
+    except Exception as e:
+        logger.error(f"Error en /queue: {e}")
+        await message.reply_text("❌ Error al obtener estado de la cola.")
+
+async def clear_queue_command(client, message):
+    """Maneja el comando /clearqueue - Limpiar cola de descargas"""
+    try:
+        user_id = message.from_user.id
+        
+        if user_id not in user_queues or not user_queues[user_id]:
+            await message.reply_text("📭 **Cola ya está vacía**")
+            return
+        
+        queue_size = len(user_queues[user_id])
+        user_queues[user_id] = []
+        
+        # Limpiar también el procesamiento actual
+        if user_id in user_current_processing:
+            del user_current_processing[user_id]
+        
+        await message.reply_text(f"🗑️ **Cola limpiada**\n\nSe removieron {queue_size} archivos de la cola.")
+        
+    except Exception as e:
+        logger.error(f"Error en /clearqueue: {e}")
+        await message.reply_text("❌ Error al limpiar la cola.")
+
+# ===== MANEJO DE ARCHIVOS CON COLA MEJORADO =====
 
 async def handle_file(client, message):
-    """Maneja la recepción de archivos con sistema de cola"""
+    """Maneja la recepción de archivos con sistema de cola MEJORADO"""
     try:
         user = message.from_user
         user_id = user.id
 
-        logger.info(f"Archivo recibido de {user_id}")
+        logger.info(f"📥 Archivo recibido de {user_id} - Agregando a cola")
 
         # Inicializar cola del usuario si no existe
         if user_id not in user_queues:
@@ -517,6 +586,15 @@ async def handle_file(client, message):
         # Si es el primer archivo en la cola, procesar inmediatamente
         if len(user_queues[user_id]) == 1:
             await process_file_queue(client, user_id)
+        else:
+            # Notificar al usuario que el archivo está en cola
+            queue_position = len(user_queues[user_id]) - 1
+            await message.reply_text(
+                f"📋 **Archivo agregado a la cola**\n\n"
+                f"**Posición en cola:** #{queue_position + 1}\n"
+                f"**Total en cola:** {len(user_queues[user_id])} archivos\n\n"
+                f"⏳ Se procesará automáticamente cuando termine el archivo actual."
+            )
         
     except Exception as e:
         logger.error(f"Error procesando archivo: {e}", exc_info=True)
@@ -526,38 +604,27 @@ async def handle_file(client, message):
             pass
 
 async def process_file_queue(client, user_id):
-    """Procesa la cola de archivos del usuario de manera secuencial"""
+    """Procesa la cola de archivos del usuario de manera secuencial - VERSIÓN MEJORADA"""
     try:
-        while user_queues.get(user_id):
+        while user_queues.get(user_id) and user_queues[user_id]:
             message = user_queues[user_id][0]
+            logger.info(f"🔄 Procesando archivo en cola para usuario {user_id}, archivos restantes: {len(user_queues[user_id])}")
+            
             await process_single_file(client, message, user_id)
             
-            # Remover el archivo procesado de la cola
-            user_queues[user_id].pop(0)
-            
-            # Si hay más archivos, continuar procesando
-            if user_queues[user_id]:
-                # Pequeña pausa entre archivos
-                await asyncio.sleep(1)
-            else:
-                # No hay más archivos, limpiar mensaje de progreso
-                if user_id in user_progress_msgs:
-                    try:
-                        await user_progress_msgs[user_id].delete()
-                        del user_progress_msgs[user_id]
-                    except:
-                        pass
+            # Pequeña pausa entre archivos para evitar sobrecarga
+            await asyncio.sleep(1)
                 
     except Exception as e:
-        logger.error(f"Error en process_file_queue: {e}")
+        logger.error(f"Error en process_file_queue: {e}", exc_info=True)
         # Limpiar cola en caso de error
         if user_id in user_queues:
             user_queues[user_id] = []
 
 async def process_single_file(client, message, user_id):
-    """Procesa un solo archivo con progreso actualizado - VERSIÓN CORREGIDA"""
+    """Procesa un solo archivo con progreso actualizado - VERSIÓN COMPLETAMENTE CORREGIDA"""
     try:
-        # Obtener información del archivo - CORREGIDO
+        # Obtener información del archivo
         file_obj = None
         file_type = None
         original_filename = None
@@ -597,7 +664,7 @@ async def process_single_file(client, message, user_id):
             await message.reply_text("❌ Error: No se pudo identificar el archivo.")
             return
 
-        # Crear directorio de usuario - CORREGIDO: usar "downloads" no "download"
+        # Crear directorio de usuario
         user_dir = file_service.get_user_directory(user_id, "downloads")
         
         # Sanitizar y generar nombre único
@@ -616,26 +683,30 @@ async def process_single_file(client, message, user_id):
 
         # Registrar archivo ANTES de descargar
         file_number = file_service.register_file(user_id, original_filename, stored_filename, "downloads")
-        logger.info(f"Archivo registrado: #{file_number} - {original_filename} -> {stored_filename}")
+        logger.info(f"📝 Archivo registrado: #{file_number} - {original_filename} -> {stored_filename}")
 
         start_time = time.time()
         
-        # Crear o actualizar mensaje de progreso
-        if user_id not in user_progress_msgs:
-            initial_message = progress_service.create_progress_message(
-                filename=original_filename,
-                current=0,
-                total=file_size,
-                speed=0,
-                file_num=len(user_queues[user_id]) if user_id in user_queues else 1,
-                total_files=len(user_queues[user_id]) if user_id in user_queues else 1,
-                user_id=user_id,
-                process_type="Descargando"
-            )
-            progress_msg = await message.reply_text(initial_message)
-            user_progress_msgs[user_id] = progress_msg
-        else:
-            progress_msg = user_progress_msgs[user_id]
+        # Crear mensaje de progreso INDIVIDUAL para este archivo
+        queue_info = ""
+        if user_id in user_queues and len(user_queues[user_id]) > 1:
+            queue_info = f"\n📋 **En cola:** {len(user_queues[user_id]) - 1} archivos restantes"
+        
+        initial_message = progress_service.create_progress_message(
+            filename=original_filename,
+            current=0,
+            total=file_size,
+            speed=0,
+            file_num=1,
+            total_files=1,
+            user_id=user_id,
+            process_type="Descargando"
+        ) + queue_info
+        
+        progress_msg = await message.reply_text(initial_message)
+        
+        # Guardar el mensaje de progreso actual para este usuario
+        user_current_processing[user_id] = progress_msg.id
 
         progress_data = {'last_update': 0}
 
@@ -648,28 +719,33 @@ async def process_single_file(client, message, user_id):
                 last_update = progress_data.get('last_update', 0)
 
                 if current_time - last_update >= 2 or current == total:
-                    queue_position = user_queues[user_id].index(message) + 1 if user_id in user_queues and user_queues[user_id] else 1
-                    queue_total = len(user_queues[user_id]) if user_id in user_queues else 1
+                    queue_info = ""
+                    if user_id in user_queues and len(user_queues[user_id]) > 1:
+                        queue_info = f"\n📋 **En cola:** {len(user_queues[user_id]) - 1} archivos restantes"
                     
                     progress_message = progress_service.create_progress_message(
                         filename=original_filename,
                         current=current,
                         total=total,
                         speed=speed,
-                        file_num=queue_position,
-                        total_files=queue_total,
+                        file_num=1,
+                        total_files=1,
                         user_id=user_id,
                         process_type="Descargando"
-                    )
+                    ) + queue_info
 
-                    await progress_msg.edit_text(progress_message)
-                    progress_data['last_update'] = current_time
+                    try:
+                        await progress_msg.edit_text(progress_message)
+                        progress_data['last_update'] = current_time
+                    except Exception as edit_error:
+                        logger.warning(f"No se pudo editar mensaje de progreso: {edit_error}")
 
             except Exception as e:
                 logger.error(f"Error en progress callback: {e}")
 
-        # Descargar archivo - CORREGIDO: manejar mejor los errores
+        # Descargar archivo
         try:
+            logger.info(f"⬇️ Iniciando descarga: {original_filename}")
             downloaded_path = await message.download(
                 file_path,
                 progress=progress_callback
@@ -684,14 +760,14 @@ async def process_single_file(client, message, user_id):
 
             # Verificar que el archivo se descargó completamente
             final_size = os.path.getsize(file_path)
-            if file_size > 0 and final_size != file_size:
-                logger.warning(f"Tamaño del archivo no coincide: esperado {file_size}, obtenido {final_size}")
+            if file_size > 0 and final_size < file_size * 0.9:  # Permitir 10% de diferencia
+                logger.warning(f"⚠️ Tamaño del archivo sospechoso: esperado {file_size}, obtenido {final_size}")
 
             size_mb = final_size / (1024 * 1024)
 
-            # Generar URL de descarga - CORREGIDO
+            # Generar URL de descarga
             download_url = file_service.create_download_url(user_id, stored_filename)
-            logger.info(f"URL generada: {download_url}")
+            logger.info(f"🔗 URL generada: {download_url}")
 
             # Obtener número real del archivo
             files_list = file_service.list_user_files(user_id, "downloads")
@@ -702,6 +778,12 @@ async def process_single_file(client, message, user_id):
                     break
 
             # Mensaje final de éxito
+            queue_info = ""
+            next_files_count = len(user_queues[user_id]) - 1 if user_id in user_queues and user_queues[user_id] else 0
+            
+            if next_files_count > 0:
+                queue_info = f"\n\n⏭️ **Siguiente archivo en cola...** ({next_files_count} restantes)"
+
             success_text = f"""✅ **Archivo #{current_file_number or file_number} Almacenado!**
 
 **Nombre:** `{original_filename}`
@@ -711,38 +793,52 @@ async def process_single_file(client, message, user_id):
 **Enlace de Descarga:**
 🔗 [{original_filename}]({download_url})
 
-**Ubicación:** Carpeta `downloads`"""
+**Ubicación:** Carpeta `downloads`{queue_info}"""
 
-            # Si es el último archivo en la cola, mostrar mensaje final
-            if user_id in user_queues and len(user_queues[user_id]) <= 1:
-                await progress_msg.edit_text(success_text, disable_web_page_preview=True)
-                # Limpiar mensaje de progreso
-                if user_id in user_progress_msgs:
-                    del user_progress_msgs[user_id]
-            else:
-                # Solo actualizar el progreso para archivos en cola
-                await progress_msg.edit_text(success_text, disable_web_page_preview=True)
-
-            logger.info(f"Archivo guardado exitosamente: {stored_filename} para usuario {user_id}")
+            # Mostrar mensaje final
+            await progress_msg.edit_text(success_text, disable_web_page_preview=True)
+            
+            logger.info(f"✅ Archivo guardado exitosamente: {stored_filename} para usuario {user_id}")
 
         except Exception as download_error:
-            logger.error(f"Error en descarga: {download_error}")
+            logger.error(f"❌ Error en descarga: {download_error}", exc_info=True)
             await progress_msg.edit_text(f"❌ Error al descargar el archivo: {str(download_error)}")
         
-        # Finalmente, remover este mensaje de la cola
+        # FINALMENTE: Remover este mensaje de la cola y procesar el siguiente
         if user_id in user_queues and user_queues[user_id]:
+            # Remover el archivo actual de la cola
             user_queues[user_id].pop(0)
+            
+            # Limpiar mensaje de procesamiento actual
+            if user_id in user_current_processing:
+                del user_current_processing[user_id]
+            
+            # Si hay más archivos en la cola, procesar el siguiente
+            if user_queues[user_id]:
+                logger.info(f"🔄 Procesando siguiente archivo en cola para usuario {user_id}")
+                await asyncio.sleep(1)  # Pequeña pausa
+                await process_file_queue(client, user_id)
 
     except Exception as e:
-        logger.error(f"Error procesando archivo individual: {e}", exc_info=True)
-        if user_id in user_progress_msgs:
-            try:
-                await user_progress_msgs[user_id].edit_text(f"❌ Error procesando archivo: {str(e)}")
-            except:
-                pass
+        logger.error(f"❌ Error procesando archivo individual: {e}", exc_info=True)
+        try:
+            # Intentar notificar al usuario del error
+            error_msg = await message.reply_text(f"❌ Error procesando archivo: {str(e)}")
+        except:
+            pass
+        
         # Asegurarse de remover de la cola incluso en error
         if user_id in user_queues and user_queues[user_id]:
             user_queues[user_id].pop(0)
+            
+        # Limpiar mensaje de procesamiento actual
+        if user_id in user_current_processing:
+            del user_current_processing[user_id]
+            
+        # Intentar continuar con la cola si hay más archivos
+        if user_id in user_queues and user_queues[user_id]:
+            await asyncio.sleep(1)
+            await process_file_queue(client, user_id)
 
 # ===== CONFIGURACIÓN DE HANDLERS =====
 
@@ -765,6 +861,10 @@ def setup_handlers(client):
     
     # YouTube
     client.on_message(filters.command("yt") & filters.private)(yt_command)
+    
+    # Gestión de cola (nuevos comandos)
+    client.on_message(filters.command("queue") & filters.private)(queue_command)
+    client.on_message(filters.command("clearqueue") & filters.private)(clear_queue_command)
     
     # Archivos (sin botones)
     client.on_message(
