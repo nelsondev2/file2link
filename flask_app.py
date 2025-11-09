@@ -196,6 +196,12 @@ def home():
                     <h4>Descargas YouTube</h4>
                     <p>Descarga videos de YouTube directamente a tu carpeta</p>
                 </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🔄</div>
+                    <h4>Cola Inteligente</h4>
+                    <p>Procesamiento automático de múltiples archivos en cola</p>
+                </div>
             </div>
 
             <div class="info-section">
@@ -210,6 +216,10 @@ def home():
                 
                 <h3>🎬 Comando YouTube:</h3>
                 <div class="code">/yt https://www.youtube.com/watch?v=ABCD1234</div>
+                
+                <h3>🔄 Comandos de Cola:</h3>
+                <div class="code">/queue - Ver archivos en cola
+/clearqueue - Limpiar cola de descargas</div>
             </div>
         </div>
     </body>
