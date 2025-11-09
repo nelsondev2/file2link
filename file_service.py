@@ -77,7 +77,7 @@ class FileService:
         return f"{RENDER_DOMAIN}/static/{user_id}/packed/{encoded_filename}"
 
     def get_user_directory(self, user_id, file_type="downloads"):
-        """Obtiene el directorio del usuario - CORREGIDO: downloads en lugar de download"""
+        """Obtiene el directorio del usuario"""
         user_dir = os.path.join(BASE_DIR, str(user_id), file_type)
         os.makedirs(user_dir, exist_ok=True)
         return user_dir
@@ -133,7 +133,7 @@ class FileService:
                         download_url = self.create_packed_url(user_id, file_data["stored_name"])
                     
                     files.append({
-                        'number': file_number,  # Número ORIGINAL, no reasignado
+                        'number': file_number,
                         'name': file_data["original_name"],
                         'stored_name': file_data["stored_name"],
                         'size': size,
@@ -145,18 +145,23 @@ class FileService:
         return files
 
     def register_file(self, user_id, original_name, stored_name, file_type="downloads"):
-        """Registra un archivo en la metadata con número PERSISTENTE"""
+        """Registra un archivo en la metadata con número PERSISTENTE - CORREGIDO"""
         user_key = f"{user_id}_{file_type}"
         if user_key not in self.metadata:
             self.metadata[user_key] = {"next_number": 1, "files": {}}
         
-        file_num = self.metadata[user_key]["next_number"] - 1
+        # CORREGIDO: Usar el número actual SIN restar 1
+        file_num = self.metadata[user_key]["next_number"]
+        self.metadata[user_key]["next_number"] += 1
+        
         self.metadata[user_key]["files"][str(file_num)] = {
             "original_name": original_name,
             "stored_name": stored_name,
             "registered_at": time.time()
         }
         self.save_metadata()
+        
+        logger.info(f"✅ Archivo registrado: #{file_num} - {original_name} para usuario {user_id}")
         return file_num
 
     def get_file_by_number(self, user_id, file_number, file_type="downloads"):
@@ -264,9 +269,6 @@ class FileService:
                 os.remove(file_path)
             
             # NO eliminamos la entrada de metadata para mantener la numeración persistente
-            # Solo marcamos como eliminado o simplemente no la usamos en list_user_files
-            # Para mantener los números, no hacemos nada con la metadata al eliminar
-            
             return True, f"Archivo #{file_number} '{file_data['original_name']}' eliminado"
             
         except Exception as e:
@@ -291,12 +293,6 @@ class FileService:
                 if os.path.isfile(file_path):
                     os.remove(file_path)
                     deleted_count += 1
-            
-            # NO reiniciamos la numeración para mantenerla persistente
-            # user_key = f"{user_id}_{file_type}"
-            # if user_key in self.metadata:
-            #     self.metadata[user_key]["files"] = {}
-            #     self.save_metadata()
             
             return True, f"Se eliminaron {deleted_count} archivos {file_type}"
             
