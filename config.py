@@ -1,4 +1,3 @@
-
 import os
 
 # ===== CONFIGURACIÓN OPTIMIZADA =====
@@ -18,3 +17,7 @@ CPU_USAGE_LIMIT = 80
 # Configuración de YouTube
 YT_DLP_TIMEOUT = 120  # 2 minutos máximo por descarga
 YT_DLP_MAX_FILE_SIZE_MB = 500  # 500 mb
+
+# Configuración de cookies (GLOBALES para todos los usuarios)
+COOKIES_DIR = os.path.join(BASE_DIR, "cookies")
+COOKIES_GLOBAL_FILE = os.path.join(COOKIES_DIR, "global_cookies.txt")
