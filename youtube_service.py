@@ -8,14 +8,15 @@ import random
 from config import BASE_DIR, YT_DLP_TIMEOUT, YT_DLP_MAX_FILE_SIZE_MB
 from file_service import file_service
 from load_manager import load_manager
+from cookies_service import cookies_service  # NUEVO IMPORT
 
 logger = logging.getLogger(__name__)
 
 class YouTubeService:
     def __init__(self):
-        # Configuración optimizada para evitar detección como bot
-        self.ydl_opts = {
-            'format': 'best[height<=360]',  # Formato más compatible
+        # Configuración base (se actualizará dinámicamente con cookies)
+        self.base_ydl_opts = {
+            'format': 'best[height<=360]',
             'outtmpl': os.path.join(BASE_DIR, 'temp', '%(id)s_%(title).100s.%(ext)s'),
             'quiet': False,
             'no_warnings': False,
@@ -27,7 +28,7 @@ class YouTubeService:
             'fragment_retries': 20,
             'skip_unavailable_fragments': True,
             'continuedl': True,
-            'concurrent_fragment_downloads': 1,  # Reducir concurrencia
+            'concurrent_fragment_downloads': 1,
             'throttled_rate': None,
             
             # Headers realistas
@@ -44,14 +45,14 @@ class YouTubeService:
             # Extractores específicos
             'extractor_args': {
                 'youtube': {
-                    'skip': ['hls', 'dash'],  # Evitar formatos problemáticos
+                    'skip': ['hls', 'dash'],
                 }
             },
             
             # Procesadores post-descarga
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',  # Convertir a MP4 seguro
+                'preferedformat': 'mp4',
             }],
         }
         
@@ -59,10 +60,43 @@ class YouTubeService:
         temp_dir = os.path.join(BASE_DIR, 'temp')
         os.makedirs(temp_dir, exist_ok=True)
 
+    def _get_ydl_opts_with_cookies(self, final_path, attempt):
+        """Obtiene opciones de yt-dlp incluyendo cookies GLOBALES si están disponibles"""
+        opts = self.base_ydl_opts.copy()
+        opts['outtmpl'] = final_path
+        
+        # Rotar User-Agents
+        user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        ]
+        
+        opts['http_headers']['User-Agent'] = user_agents[attempt % len(user_agents)]
+        
+        # Estrategias diferentes por intento
+        if attempt == 2:
+            opts['format'] = 'worst[height>=240]'
+            opts['extractor_args']['youtube']['skip'] = []
+        
+        # AGREGAR COOKIES GLOBALES SI ESTÁN DISPONIBLES
+        cookies_path = cookies_service.get_global_cookies_path()
+        if cookies_path:
+            opts['cookiefile'] = cookies_path
+            logger.info(f"🎯 Usando cookies GLOBALES: {cookies_path}")
+        
+        return opts
+
     async def download_youtube_video(self, url, user_id):
-        """Descarga un video de YouTube con múltiples estrategias anti-bot"""
+        """Descarga un video de YouTube con soporte para cookies GLOBALES"""
         MAX_RETRIES = 2
         RETRY_DELAY = 10
+        
+        # Verificar si hay cookies GLOBALES configuradas
+        has_cookies = cookies_service.has_global_cookies()
+        cookies_status = "🔐 **Con cookies**" if has_cookies else "🔓 **Sin cookies**"
+        
+        logger.info(f"🎬 Iniciando descarga YouTube para {user_id} - {cookies_status}")
         
         for attempt in range(1, MAX_RETRIES + 1):
             try:
@@ -91,8 +125,8 @@ class YouTubeService:
                 final_filename = await self._get_unique_filename(user_dir, original_filename)
                 final_path = os.path.join(user_dir, final_filename)
 
-                # Configurar opciones con rotación de User-Agent
-                download_opts = await self._get_download_options(final_path, attempt)
+                # Configurar opciones CON cookies GLOBALES
+                download_opts = self._get_ydl_opts_with_cookies(final_path, attempt)
                 
                 # Descargar con manejo mejorado
                 success, result = await self._download_with_retry(url, download_opts, video_info['title'], attempt)
@@ -109,7 +143,7 @@ class YouTubeService:
                     file_size = os.path.getsize(final_path)
                     size_mb = file_size / (1024 * 1024)
                     
-                    logger.info(f"✅ Descarga exitosa: {original_filename} ({size_mb:.2f} MB)")
+                    logger.info(f"✅ Descarga exitosa: {original_filename} ({size_mb:.2f} MB) - {cookies_status}")
                     
                     return True, {
                         'file_number': file_number,
@@ -118,7 +152,8 @@ class YouTubeService:
                         'url': download_url,
                         'size_mb': size_mb,
                         'duration': video_info.get('duration', 0),
-                        'title': video_info['title']
+                        'title': video_info['title'],
+                        'cookies_used': has_cookies
                     }
                 else:
                     if attempt < MAX_RETRIES:
@@ -148,7 +183,7 @@ class YouTubeService:
             'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         ]
         
-        opts = self.ydl_opts.copy()
+        opts = self.base_ydl_opts.copy()
         opts['outtmpl'] = final_path
         opts['http_headers']['User-Agent'] = user_agents[attempt % len(user_agents)]
         
