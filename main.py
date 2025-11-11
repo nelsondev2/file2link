@@ -5,7 +5,7 @@ import time
 import sys
 from waitress import serve
 
-from config import BASE_DIR, PORT
+from config import BASE_DIR, PORT, COOKIES_DIR
 from telegram_bot import TelegramBot
 from flask_app import app
 
@@ -30,8 +30,11 @@ def start_web_server():
     serve(app, host='0.0.0.0', port=PORT)
 
 if __name__ == '__main__':
+    # Crear directorios necesarios
     os.makedirs(BASE_DIR, exist_ok=True)
-    logger.info("Directorio static creado/verificado")
+    os.makedirs(COOKIES_DIR, exist_ok=True)  # NUEVO: directorio de cookies
+    
+    logger.info("Directorios creados/verificados: static, cookies")
 
     bot_thread = threading.Thread(target=start_telegram_bot, daemon=True)
     bot_thread.start()
