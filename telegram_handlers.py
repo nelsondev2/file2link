@@ -12,7 +12,7 @@ from file_service import file_service
 from progress_service import progress_service
 from packing_service import packing_service
 from youtube_service import youtube_service
-from cookies_service import cookies_service  # NUEVO IMPORT
+from cookies_service import cookies_service
 
 logger = logging.getLogger(__name__)
 
@@ -538,6 +538,8 @@ async def yt_command(client, message):
 async def set_cookies_command(client, message):
     """Maneja el comando /setcookies - Configurar cookies GLOBALES para YouTube"""
     try:
+        logger.info(f"Comando /setcookies recibido de {message.from_user.id}")
+
         # Verificar que el mensaje tiene un documento adjunto
         if not message.document:
             await message.reply_text(
@@ -565,27 +567,44 @@ async def set_cookies_command(client, message):
             )
             return
 
-        # Descargar el archivo de cookies
-        status_msg = await message.reply_text("📥 **Descargando archivo de cookies...**")
-        
-        # Crear archivo temporal
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt') as temp_file:
-            temp_path = temp_file.name
-        
+        # Verificar tamaño del archivo (máximo 50KB)
+        if message.document.file_size > 50 * 1024:
+            await message.reply_text(
+                "❌ **Archivo demasiado grande.**\n\n"
+                "El archivo de cookies no debe exceder los 50KB.\n"
+                "Probablemente no es un archivo de cookies válido."
+            )
+            return
+
+        # Mensaje de estado
+        status_msg = await message.reply_text("📥 **Descargando y procesando archivo de cookies...**")
+
         try:
-            # Descargar el archivo
-            await message.download(temp_path)
+            # Descargar el archivo directamente
+            download_path = await message.download()
             
-            # Leer contenido
-            with open(temp_path, 'r', encoding='utf-8', errors='ignore') as f:
+            if not download_path:
+                await status_msg.edit_text("❌ **Error al descargar el archivo.**")
+                return
+
+            # Leer contenido del archivo
+            with open(download_path, 'r', encoding='utf-8', errors='ignore') as f:
                 cookies_content = f.read()
-            
-            # Validar que tenga contenido
+
+            # Validaciones del contenido
             if len(cookies_content.strip()) == 0:
                 await status_msg.edit_text("❌ **El archivo está vacío.**")
                 return
-            
+
+            # Verificar que tenga formato de cookies (debe contener dominios como .youtube.com)
+            if '.youtube.com' not in cookies_content and 'youtube.com' not in cookies_content:
+                await status_msg.edit_text(
+                    "❌ **Formato de cookies inválido.**\n\n"
+                    "El archivo no parece contener cookies de YouTube.\n"
+                    "Asegúrate de exportar las cookies correctamente."
+                )
+                return
+
             # Guardar cookies GLOBALES
             success, result_message = cookies_service.save_global_cookies(cookies_content)
             
@@ -593,29 +612,42 @@ async def set_cookies_command(client, message):
                 cookies_info = cookies_service.get_global_cookies_info()
                 size_info = f" ({cookies_info['size_mb']:.2f} KB)" if cookies_info else ""
                 
+                # Contar líneas de cookies
+                cookie_lines = len([line for line in cookies_content.split('\n') if line.strip() and not line.startswith('#')])
+                
                 response_text = f"{result_message}\n\n"
                 response_text += f"**Archivo:** `{file_name}`{size_info}\n"
+                response_text += f"**Líneas de cookies:** {cookie_lines}\n"
                 response_text += f"**Estado:** ✅ Cookies GLOBALES configuradas\n\n"
                 response_text += "**TODAS las descargas de YouTube usarán estas cookies para:**\n"
                 response_text += "• Acceder a contenido restringido por edad\n"
                 response_text += "• Descargar videos privados/lista de reproducción\n"
                 response_text += "• Evitar límites de descarga\n\n"
-                response_text += "**Para eliminar cookies:** /clearcookies"
+                response_text += "**Para eliminar cookies:** /clearcookies\n"
+                response_text += "**Para ver estado:** /cookies"
                 
                 await status_msg.edit_text(response_text)
+                logger.info(f"Cookies globales guardadas exitosamente por usuario {message.from_user.id}")
             else:
                 await status_msg.edit_text(result_message)
                 
         except Exception as e:
             logger.error(f"Error procesando cookies: {e}")
-            await status_msg.edit_text("❌ **Error al procesar el archivo de cookies.**")
+            await status_msg.edit_text(
+                "❌ **Error al procesar el archivo de cookies.**\n\n"
+                "Posibles causas:\n"
+                "• El archivo está corrupto\n"
+                "• No tienes permisos de escritura\n"
+                "• Error temporal del sistema"
+            )
         
         finally:
-            # Limpiar archivo temporal
+            # Limpiar archivo temporal si existe
             try:
-                os.unlink(temp_path)
-            except:
-                pass
+                if 'download_path' in locals() and os.path.exists(download_path):
+                    os.remove(download_path)
+            except Exception as e:
+                logger.error(f"Error limpiando archivo temporal: {e}")
 
     except Exception as e:
         logger.error(f"Error en /setcookies: {e}")
@@ -638,19 +670,33 @@ async def cookies_status_command(client, message):
         
         if not cookies_info:
             response_text = "🔓 **Estado de Cookies GLOBALES**\n\n"
-            response_text += "**Configuración:** No hay cookies globales configuradas\n\n"
+            response_text += "**Configuración:** ❌ No hay cookies globales configuradas\n\n"
             response_text += "**Para configurar cookies:**\n"
             response_text += "1. Exporta cookies de YouTube desde tu navegador\n"
             response_text += "2. Envía el archivo .txt con /setcookies\n\n"
-            response_text += "**Beneficios de usar cookies:**\n"
-            response_text += "• Acceder a contenido restringido\n"
-            response_text += "• Descargar videos privados\n"
-            response_text += "• Evitar límites de descarga"
+            response_text += "**Formato requerido:**\n"
+            response_text += "• Archivo .txt (Netscape format)\n"
+            response_text += "• Debe contener cookies de .youtube.com\n"
+            response_text += "• Tamaño máximo: 50KB\n\n"
+            response_text += "**Cómo usar el comando:**\n"
+            response_text += "1. Escribe `/setcookies`\n"
+            response_text += "2. Adjunta el archivo cookies.txt\n"
+            response_text += "3. Envía el mensaje"
         else:
+            # Contar líneas de cookies
+            try:
+                with open(cookies_info['path'], 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                cookie_count = len([l for l in lines if l.strip() and not l.startswith('#')])
+            except:
+                cookie_count = "Desconocido"
+            
             response_text = "🔐 **Estado de Cookies GLOBALES**\n\n"
             response_text += f"**Configuración:** ✅ Cookies globales activas\n"
             response_text += f"**Archivo:** `{os.path.basename(cookies_info['path'])}`\n"
-            response_text += f"**Tamaño:** {cookies_info['size_mb']:.2f} KB\n\n"
+            response_text += f"**Tamaño:** {cookies_info['size_mb']:.2f} KB\n"
+            response_text += f"**Cookies:** {cookie_count} entradas\n"
+            response_text += f"**Formato:** {cookies_info['extension']}\n\n"
             response_text += "**TODAS las descargas de YouTube usarán estas cookies para:**\n"
             response_text += "• Acceder a contenido restringido\n"
             response_text += "• Descargar videos privados\n"
