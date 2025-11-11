@@ -8,7 +8,7 @@ import random
 from config import BASE_DIR, YT_DLP_TIMEOUT, YT_DLP_MAX_FILE_SIZE_MB
 from file_service import file_service
 from load_manager import load_manager
-from cookies_service import cookies_service  # NUEVO IMPORT
+from cookies_service import cookies_service
 
 logger = logging.getLogger(__name__)
 
