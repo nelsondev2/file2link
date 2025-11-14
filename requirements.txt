@@ -1,0 +1,7 @@
+pyrogram
+tgcrypto
+python-dotenv
+flask
+waitress
+py7zr
+yt-dlp
