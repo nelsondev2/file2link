@@ -192,9 +192,9 @@ def home():
                 </div>
                 
                 <div class="feature-card">
-                    <div class="feature-icon">🌐</div>
-                    <h4>Descargas Web</h4>
-                    <p>Descarga archivos desde enlaces web directamente a tu carpeta</p>
+                    <div class="feature-icon">🎬</div>
+                    <h4>Descargas YouTube</h4>
+                    <p>Descarga videos de YouTube directamente a tu carpeta</p>
                 </div>
                 
                 <div class="feature-card">
@@ -214,8 +214,8 @@ def home():
                 <h3>🔗 Ejemplo de enlace:</h3>
                 <div class="code">https://nelson-file2link.onrender.com/static/123456/downloads/mi_archivo.pdf</div>
                 
-                <h3>🌐 Comando Descarga Web:</h3>
-                <div class="code">/dl https://ejemplo.com/archivo.pdf</div>
+                <h3>🎬 Comando YouTube:</h3>
+                <div class="code">/yt https://www.youtube.com/watch?v=ABCD1234</div>
                 
                 <h3>🔄 Comandos de Cola:</h3>
                 <div class="code">/queue - Ver archivos en cola
