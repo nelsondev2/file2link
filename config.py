@@ -14,6 +14,10 @@ COMPRESSION_TIMEOUT = 600
 MAX_CONCURRENT_PROCESSES = 1
 CPU_USAGE_LIMIT = 80
 
-# Configuración de descargas directas
-DOWNLOAD_TIMEOUT = 300  # 5 minutos máximo por descarga
-DOWNLOAD_MAX_FILE_SIZE_MB = 2000  # 2 GB máximo
+# Configuración de YouTube
+YT_DLP_TIMEOUT = 120  # 2 minutos máximo por descarga
+YT_DLP_MAX_FILE_SIZE_MB = 500  # 500 mb
+
+# Configuración de cookies (GLOBALES para todos los usuarios)
+COOKIES_DIR = os.path.join(BASE_DIR, "cookies")
+COOKIES_GLOBAL_FILE = os.path.join(COOKIES_DIR, "global_cookies.txt")
