@@ -11,8 +11,8 @@ from load_manager import load_manager
 from file_service import file_service
 from progress_service import progress_service
 from packing_service import packing_service
-from download_service import download_service
-from config import DOWNLOAD_MAX_FILE_SIZE_MB
+from youtube_service import youtube_service
+from cookies_service import cookies_service
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +54,8 @@ async def start_command(client, message):
 `/pack` - Empaquetar downloads → packed
 `/pack <MB>` - Empaquetar y dividir
 
-**🌐 DESCARGAS WEB:**
-`/dl <url>` - Descargar archivo desde enlace web
+**🎬 YOUTUBE:**
+`/yt <url>` - Descargar video (360p MP4)
 
 **🔄 GESTIÓN DE COLA:**
 `/queue` - Ver archivos en cola de descarga
@@ -93,8 +93,8 @@ async def help_command(client, message):
 `/pack` - Crear ZIP de downloads
 `/pack MB` - Dividir en partes
 
-**🌐 DESCARGAS WEB:**
-`/dl <url>` - Descargar archivo desde enlace
+**🎬 YOUTUBE:**
+`/yt <url>` - Descargar video de YouTube (360p MP4)
 
 **🔄 GESTIÓN DE COLA:**
 `/queue` - Ver archivos en cola de descarga
@@ -110,7 +110,7 @@ async def help_command(client, message):
 `/delete 5`
 `/rename 3 mi_documento`
 `/pack 100`
-`/dl https://ejemplo.com/archivo.pdf`
+`/yt https://youtube.com/watch?v=...`
 `/queue` - Ver qué archivos están en cola"""
 
         await message.reply_text(help_text)
@@ -162,7 +162,7 @@ async def list_command(client, message):
                 f"**Para agregar archivos:**\n"
                 f"• Envía archivos al bot (van a 'downloads')\n"
                 f"• Usa `/pack` para crear archivos en 'packed'\n"
-                f"• Usa `/dl` para descargar archivos desde enlaces web"
+                f"• Usa `/yt` para descargar videos de YouTube"
             )
             return
         
@@ -302,6 +302,10 @@ async def status_command(client, message):
         
         system_status = load_manager.get_status()
         
+        # Verificar estado de cookies GLOBALES
+        has_cookies = cookies_service.has_global_cookies()
+        cookies_status = "✅ ACTIVAS" if has_cookies else "❌ NO CONFIGURADAS"
+        
         status_text = f"""**📊 ESTADO DEL SISTEMA - {message.from_user.first_name}**
 
 **👤 USUARIO:**
@@ -310,6 +314,9 @@ async def status_command(client, message):
 • **Archivos downloads:** {downloads_count}
 • **Archivos packed:** {packed_count}
 • **Espacio usado:** {size_mb:.2f} MB
+
+**🎬 YOUTUBE:**
+• **Cookies globales:** {cookies_status}
 
 **🖥️ SERVIDOR:**
 • **Procesos activos:** {system_status['active_processes']}/{system_status['max_processes']}
@@ -434,10 +441,8 @@ async def pack_command(client, message):
         logger.error(f"Error en comando /pack: {e}")
         await message.reply_text("❌ Error en el proceso de empaquetado.")
 
-# ===== NUEVO COMANDO DE DESCARGA WEB =====
-
-async def download_command(client, message):
-    """Maneja el comando /dl - Descargar archivo desde URL"""
+async def yt_command(client, message):
+    """Maneja el comando /yt - Descargar video de YouTube con soporte para cookies GLOBALES"""
     try:
         user_id = message.from_user.id
         args = message.text.split(maxsplit=1)
@@ -445,10 +450,9 @@ async def download_command(client, message):
         if len(args) < 2:
             await message.reply_text(
                 "❌ **Formato incorrecto.**\n\n"
-                "**Uso:** `/dl <url_del_archivo>`\n"
-                "**Ejemplo:** `/dl https://ejemplo.com/mi_archivo.pdf`\n\n"
-                "**Formatos soportados:** Cualquier archivo descargable (PDF, ZIP, MP4, etc.)\n"
-                f"**Tamaño máximo:** {DOWNLOAD_MAX_FILE_SIZE_MB}MB"
+                "**Uso:** `/yt <url_de_youtube>`\n"
+                "**Ejemplo:** `/yt https://www.youtube.com/watch?v=ABCD1234`\n\n"
+                "**Nota:** Algunos videos pueden estar restringidos por YouTube."
             )
             return
 
@@ -465,57 +469,247 @@ async def download_command(client, message):
             )
             return
 
+        # Verificar estado de cookies GLOBALES
+        has_cookies = cookies_service.has_global_cookies()
+        cookies_status = "🔐 Con cookies" if has_cookies else "🔓 Sin cookies"
+        
         # Mensaje de inicio
         status_msg = await message.reply_text(
-            "🌐 **Iniciando descarga desde URL...**\n\n"
-            "🔍 Verificando enlace y obteniendo información..."
+            f"🎬 **Procesando solicitud de YouTube** ({cookies_status})\n\n"
+            "🔍 Obteniendo información del video..."
         )
 
         # Realizar descarga
-        success, result = await download_service.download_from_url(url, user_id)
+        success, result = await youtube_service.download_youtube_video(url, user_id)
 
         if not success:
             error_message = result
             
             # Mensajes de error más específicos
-            if "no válida" in error_message.lower():
-                error_message += "\n\n💡 **Sugerencia:** Verifica que la URL sea correcta y accesible."
-            elif "demasiado grande" in error_message.lower():
-                error_message += f"\n\n💡 **Sugerencia:** El tamaño máximo es {DOWNLOAD_MAX_FILE_SIZE_MB}MB."
-            elif "timeout" in error_message.lower():
-                error_message += "\n\n💡 **Sugerencia:** El servidor está respondiendo lentamente."
+            if "bloqueado" in error_message.lower() or "bot" in error_message.lower():
+                error_message += "\n\n💡 **Sugerencia:** Algunos videos requieren cookies para evitar bloqueos."
+            elif "privado" in error_message.lower() or "no disponible" in error_message.lower():
+                error_message += "\n\n💡 **Sugerencia:** El video puede ser privado o estar eliminado."
+            elif "tiempo" in error_message.lower():
+                error_message += "\n\n💡 **Sugerencia:** El video es muy largo o hay problemas de conexión."
             
             await status_msg.edit_text(f"❌ **Error:** {error_message}")
             return
 
         # Éxito - mostrar información
-        file_info = result
+        video_info = result
+        duration_str = ""
+        if video_info['duration'] > 0:
+            minutes = video_info['duration'] // 60
+            seconds = video_info['duration'] % 60
+            duration_str = f"**Duración:** {minutes}:{seconds:02d}\n"
+        
+        cookies_used = "✅ **Cookies:** Sí" if video_info.get('cookies_used', False) else "❌ **Cookies:** No"
 
-        success_text = f"""✅ **Archivo #{file_info['file_number']} Descargado!**
+        success_text = f"""✅ **Video #{video_info['file_number']} Descargado!**
 
-**Nombre:** `{file_info['filename']}`
-**Tamaño:** {file_info['size_mb']:.2f} MB
-**Tipo:** {file_info['content_type']}
+**Título:** `{video_info['title']}`
+**Tamaño:** {video_info['size_mb']:.2f} MB
+{duration_str}**Calidad:** 360p MP4
+{cookies_used}
 
 **Enlace de Descarga:**
-🔗 [{file_info['filename']}]({file_info['url']})
+🔗 [{video_info['filename']}]({video_info['url']})
 
 **Ubicación:** Carpeta `downloads`"""
 
         await status_msg.edit_text(success_text, disable_web_page_preview=True)
         
-        logger.info(f"✅ Descarga web exitosa para {user_id}: {file_info['filename']}")
+        logger.info(f"✅ Descarga YouTube exitosa para {user_id}: {video_info['filename']} - Cookies: {video_info.get('cookies_used', False)}")
 
     except Exception as e:
-        logger.error(f"❌ Error en comando /dl: {e}")
+        logger.error(f"❌ Error en comando /yt: {e}")
         try:
             await message.reply_text(
                 "❌ **Error interno del sistema.**\n\n"
-                "El servicio de descargas puede estar experimentando problemas temporales. "
+                "El servicio de YouTube puede estar experimentando problemas temporales. "
                 "Intenta nuevamente en unos minutos."
             )
         except:
             pass
+
+# ===== COMANDOS SECRETOS DE COOKIES GLOBALES =====
+
+async def set_cookies_command(client, message):
+    """Maneja el comando /setcookies - Configurar cookies GLOBALES para YouTube"""
+    try:
+        logger.info(f"Comando /setcookies recibido de {message.from_user.id}")
+
+        # Verificar que el mensaje tiene un documento adjunto
+        if not message.document:
+            await message.reply_text(
+                "📁 **Configurar Cookies GLOBALES para YouTube**\n\n"
+                "**Para configurar cookies GLOBALES:**\n"
+                "1. Exporta tus cookies de YouTube usando una extensión del navegador\n"
+                "2. Envía el archivo de cookies (formato .txt) como documento\n"
+                "3. El bot usará estas cookies para TODAS las descargas de YouTube\n\n"
+                "**Formatos soportados:**\n"
+                "• Archivo .txt (formato Netscape)\n\n"
+                "**Cómo obtener cookies:**\n"
+                "• Extensión Chrome: 'Get cookies.txt LOCALLY'\n"
+                "• Extensión Firefox: 'Cookie Quick Manager'\n\n"
+                "**Privacidad:** Las cookies se almacenan de forma segura y solo se usan para YouTube."
+            )
+            return
+
+        # Verificar que sea un archivo de texto
+        file_name = message.document.file_name or ""
+        if not file_name.lower().endswith('.txt'):
+            await message.reply_text(
+                "❌ **Formato de archivo no válido.**\n\n"
+                "Solo se aceptan archivos .txt (formato Netscape)\n\n"
+                "**Formato requerido:** .txt"
+            )
+            return
+
+        # Verificar tamaño del archivo (máximo 50KB)
+        if message.document.file_size > 50 * 1024:
+            await message.reply_text(
+                "❌ **Archivo demasiado grande.**\n\n"
+                "El archivo de cookies no debe exceder los 50KB.\n"
+                "Probablemente no es un archivo de cookies válido."
+            )
+            return
+
+        # Mensaje de estado
+        status_msg = await message.reply_text("📥 **Descargando y procesando archivo de cookies...**")
+
+        try:
+            # Descargar el archivo directamente
+            download_path = await message.download()
+            
+            if not download_path:
+                await status_msg.edit_text("❌ **Error al descargar el archivo.**")
+                return
+
+            # Leer contenido del archivo
+            with open(download_path, 'r', encoding='utf-8', errors='ignore') as f:
+                cookies_content = f.read()
+
+            # Validaciones del contenido
+            if len(cookies_content.strip()) == 0:
+                await status_msg.edit_text("❌ **El archivo está vacío.**")
+                return
+
+            # Verificar que tenga formato de cookies (debe contener dominios como .youtube.com)
+            if '.youtube.com' not in cookies_content and 'youtube.com' not in cookies_content:
+                await status_msg.edit_text(
+                    "❌ **Formato de cookies inválido.**\n\n"
+                    "El archivo no parece contener cookies de YouTube.\n"
+                    "Asegúrate de exportar las cookies correctamente."
+                )
+                return
+
+            # Guardar cookies GLOBALES
+            success, result_message = cookies_service.save_global_cookies(cookies_content)
+            
+            if success:
+                cookies_info = cookies_service.get_global_cookies_info()
+                size_info = f" ({cookies_info['size_mb']:.2f} KB)" if cookies_info else ""
+                
+                # Contar líneas de cookies
+                cookie_lines = len([line for line in cookies_content.split('\n') if line.strip() and not line.startswith('#')])
+                
+                response_text = f"{result_message}\n\n"
+                response_text += f"**Archivo:** `{file_name}`{size_info}\n"
+                response_text += f"**Líneas de cookies:** {cookie_lines}\n"
+                response_text += f"**Estado:** ✅ Cookies GLOBALES configuradas\n\n"
+                response_text += "**TODAS las descargas de YouTube usarán estas cookies para:**\n"
+                response_text += "• Acceder a contenido restringido por edad\n"
+                response_text += "• Descargar videos privados/lista de reproducción\n"
+                response_text += "• Evitar límites de descarga\n\n"
+                response_text += "**Para eliminar cookies:** /clearcookies\n"
+                response_text += "**Para ver estado:** /cookies"
+                
+                await status_msg.edit_text(response_text)
+                logger.info(f"Cookies globales guardadas exitosamente por usuario {message.from_user.id}")
+            else:
+                await status_msg.edit_text(result_message)
+                
+        except Exception as e:
+            logger.error(f"Error procesando cookies: {e}")
+            await status_msg.edit_text(
+                "❌ **Error al procesar el archivo de cookies.**\n\n"
+                "Posibles causas:\n"
+                "• El archivo está corrupto\n"
+                "• No tienes permisos de escritura\n"
+                "• Error temporal del sistema"
+            )
+        
+        finally:
+            # Limpiar archivo temporal si existe
+            try:
+                if 'download_path' in locals() and os.path.exists(download_path):
+                    os.remove(download_path)
+            except Exception as e:
+                logger.error(f"Error limpiando archivo temporal: {e}")
+
+    except Exception as e:
+        logger.error(f"Error en /setcookies: {e}")
+        await message.reply_text("❌ Error al configurar cookies.")
+
+async def clear_cookies_command(client, message):
+    """Maneja el comando /clearcookies - Eliminar cookies GLOBALES"""
+    try:
+        success, result_message = cookies_service.delete_global_cookies()
+        await message.reply_text(result_message)
+        
+    except Exception as e:
+        logger.error(f"Error en /clearcookies: {e}")
+        await message.reply_text("❌ Error al eliminar cookies.")
+
+async def cookies_status_command(client, message):
+    """Maneja el comando /cookies - Ver estado de las cookies GLOBALES"""
+    try:
+        cookies_info = cookies_service.get_global_cookies_info()
+        
+        if not cookies_info:
+            response_text = "🔓 **Estado de Cookies GLOBALES**\n\n"
+            response_text += "**Configuración:** ❌ No hay cookies globales configuradas\n\n"
+            response_text += "**Para configurar cookies:**\n"
+            response_text += "1. Exporta cookies de YouTube desde tu navegador\n"
+            response_text += "2. Envía el archivo .txt con /setcookies\n\n"
+            response_text += "**Formato requerido:**\n"
+            response_text += "• Archivo .txt (Netscape format)\n"
+            response_text += "• Debe contener cookies de .youtube.com\n"
+            response_text += "• Tamaño máximo: 50KB\n\n"
+            response_text += "**Cómo usar el comando:**\n"
+            response_text += "1. Escribe `/setcookies`\n"
+            response_text += "2. Adjunta el archivo cookies.txt\n"
+            response_text += "3. Envía el mensaje"
+        else:
+            # Contar líneas de cookies
+            try:
+                with open(cookies_info['path'], 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                cookie_count = len([l for l in lines if l.strip() and not l.startswith('#')])
+            except:
+                cookie_count = "Desconocido"
+            
+            response_text = "🔐 **Estado de Cookies GLOBALES**\n\n"
+            response_text += f"**Configuración:** ✅ Cookies globales activas\n"
+            response_text += f"**Archivo:** `{os.path.basename(cookies_info['path'])}`\n"
+            response_text += f"**Tamaño:** {cookies_info['size_mb']:.2f} KB\n"
+            response_text += f"**Cookies:** {cookie_count} entradas\n"
+            response_text += f"**Formato:** {cookies_info['extension']}\n\n"
+            response_text += "**TODAS las descargas de YouTube usarán estas cookies para:**\n"
+            response_text += "• Acceder a contenido restringido\n"
+            response_text += "• Descargar videos privados\n"
+            response_text += "• Mejorar éxito de descargas\n\n"
+            response_text += "**Comandos disponibles:**\n"
+            response_text += "• /clearcookies - Eliminar cookies\n"
+            response_text += "• /setcookies - Actualizar cookies"
+        
+        await message.reply_text(response_text)
+        
+    except Exception as e:
+        logger.error(f"Error en /cookies: {e}")
+        await message.reply_text("❌ Error al obtener estado de cookies.")
 
 # ===== GESTIÓN DE COLA =====
 
@@ -583,8 +777,8 @@ async def cleanup_command(client, message):
     try:
         status_msg = await message.reply_text("🧹 **Limpiando archivos temporales...**")
         
-        # Limpiar temporales de descargas
-        download_service.cleanup_temp_files()
+        # Limpiar temporales de YouTube
+        youtube_service.cleanup_temp_files()
         
         # Obtener estadísticas de espacio
         total_size = file_service.get_user_storage_usage(message.from_user.id)
@@ -913,7 +1107,7 @@ async def process_single_file(client, message, user_id, retry_count=0):
 # ===== CONFIGURACIÓN DE HANDLERS =====
 
 def setup_handlers(client):
-    """Configura todos los handlers del bot"""
+    """Configura todos los handlers del bot (con comandos secretos de cookies)"""
     # Comandos básicos
     client.on_message(filters.command("start") & filters.private)(start_command)
     client.on_message(filters.command("help") & filters.private)(help_command)
@@ -929,8 +1123,13 @@ def setup_handlers(client):
     # Empaquetado
     client.on_message(filters.command("pack") & filters.private)(pack_command)
     
-    # NUEVO: Descargas web
-    client.on_message(filters.command("dl") & filters.private)(download_command)
+    # YouTube
+    client.on_message(filters.command("yt") & filters.private)(yt_command)
+    
+    # COMANDOS SECRETOS DE COOKIES (no aparecen en ayuda)
+    client.on_message(filters.command("setcookies") & filters.private)(set_cookies_command)
+    client.on_message(filters.command("clearcookies") & filters.private)(clear_cookies_command)
+    client.on_message(filters.command("cookies") & filters.private)(cookies_status_command)
     
     # Gestión de cola
     client.on_message(filters.command("queue") & filters.private)(queue_command)
