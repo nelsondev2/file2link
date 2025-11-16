@@ -9,15 +9,11 @@ BASE_DIR = "static"
 PORT = int(os.getenv("PORT", 8080))
 
 # Configuración optimizada para CPU limitada
-MAX_PART_SIZE_MB = 2000
+MAX_PART_SIZE_MB = 100
 COMPRESSION_TIMEOUT = 600
 MAX_CONCURRENT_PROCESSES = 1
 CPU_USAGE_LIMIT = 80
 
-# Configuración de YouTube
-YT_DLP_TIMEOUT = 120  # 2 minutos máximo por descarga
-YT_DLP_MAX_FILE_SIZE_MB = 500  # 500 mb
-
-# Configuración de cookies (GLOBALES para todos los usuarios)
-COOKIES_DIR = os.path.join(BASE_DIR, "cookies")
-COOKIES_GLOBAL_FILE = os.path.join(COOKIES_DIR, "global_cookies.txt")
+# ✅ NUEVO: Tamaño máximo de archivos configurable
+MAX_FILE_SIZE_MB = 2000  # 2000MB por defecto
+MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024  # Cálculo automático en bytes
