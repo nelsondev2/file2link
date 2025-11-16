@@ -1,29 +1,10 @@
 #!/bin/bash
 set -o errexit
 
-echo "🚀 Iniciando Bot de Anime..."
+echo "🚀 Iniciando Bot de File2Link..."
 
 # ===========================================
-# FASE 1: VERIFICACIÓN DE FFMPEG
-# ===========================================
-
-echo "🔍 Verificando FFmpeg..."
-
-if command -v ffmpeg &> /dev/null; then
-    ffmpeg_version=$(ffmpeg -version | head -n1 | cut -d' ' -f3)
-    echo "🎬 FFmpeg disponible: versión $ffmpeg_version"
-else
-    echo "⚠️ FFmpeg no disponible - Usando modo compatible"
-fi
-
-if command -v ffprobe &> /dev/null; then
-    echo "📊 FFprobe disponible"
-else
-    echo "⚠️ FFprobe no disponible - Duración estimada"
-fi
-
-# ===========================================
-# FASE 2: VERIFICACIÓN DE VARIABLES DE ENTORNO
+# FASE 1: VERIFICACIÓN DE VARIABLES DE ENTORNO
 # ===========================================
 
 echo "🔧 Verificando variables de entorno..."
@@ -50,7 +31,7 @@ fi
 echo "✅ Todas las variables de entorno configuradas"
 
 # ===========================================
-# FASE 3: INICIO DE LA APLICACIÓN
+# FASE 2: INICIO DE LA APLICACIÓN
 # ===========================================
 
 echo "🎯 Iniciando bot..."
