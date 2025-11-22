@@ -606,15 +606,7 @@ async def handle_file(client, message):
         # Si es el primer archivo en la cola, procesar inmediatamente
         if len(user_queues[user_id]) == 1:
             await process_file_queue(client, user_id)
-        else:
-            # Notificar al usuario que el archivo está en cola
-            queue_position = len(user_queues[user_id]) - 1
-            await message.reply_text(
-                f"📋 **Archivo agregado a la cola**\n\n"
-                f"**Posición en cola:** #{queue_position + 1}\n"
-                f"**Total en cola:** {len(user_queues[user_id])} archivos\n\n"
-                f"⏳ Se procesará automáticamente cuando termine el archivo actual."
-            )
+        # ⬇️ ELIMINADO: No mostrar mensaje de "archivo agregado a la cola"
         
     except Exception as e:
         logger.error(f"Error procesando archivo: {e}", exc_info=True)
@@ -642,7 +634,7 @@ async def process_file_queue(client, user_id):
             user_queues[user_id] = []
 
 async def process_single_file(client, message, user_id, retry_count=0):
-    """Procesa un solo archivo con progreso MEJORADO (con ETA y nombre)"""
+    """Procesa un solo archivo con progreso MEJORADO (sin tiempo transcurrido)"""
     max_retries = 2
     start_time = time.time()
     
@@ -709,20 +701,15 @@ async def process_single_file(client, message, user_id, retry_count=0):
         logger.info(f"📝 Archivo registrado: #{file_number} - {original_filename} -> {stored_filename}")
 
         # Crear mensaje de progreso INDIVIDUAL para este archivo
-        queue_info = ""
-        if user_id in user_queues and len(user_queues[user_id]) > 1:
-            queue_info = f"\n📋 **En cola:** {len(user_queues[user_id]) - 1} archivos restantes"
-        
-        # ⬇️ ACTUALIZADO: Usar elapsed_time=0 y user_first_name
+        # ⬇️ ELIMINADO: queue_info del mensaje inicial
         initial_message = progress_service.create_progress_message(
             filename=original_filename,
             current=0,
             total=file_size,
             speed=0,
-            elapsed_time=0,
             user_first_name=message.from_user.first_name,
             process_type="Subiendo"
-        ) + queue_info
+        )
         
         progress_msg = await message.reply_text(initial_message)
         
@@ -740,20 +727,15 @@ async def process_single_file(client, message, user_id, retry_count=0):
                 last_update = progress_data.get('last_update', 0)
 
                 if current_time - last_update >= 2 or current == total:
-                    queue_info = ""
-                    if user_id in user_queues and len(user_queues[user_id]) > 1:
-                        queue_info = f"\n📋 **En cola:** {len(user_queues[user_id]) - 1} archivos restantes"
-                    
-                    # ⬇️ ACTUALIZADO: Incluir elapsed_time y user_first_name
+                    # ⬇️ ELIMINADO: queue_info del mensaje de progreso
                     progress_message = progress_service.create_progress_message(
                         filename=original_filename,
                         current=current,
                         total=total,
                         speed=speed,
-                        elapsed_time=elapsed_time,
                         user_first_name=message.from_user.first_name,
                         process_type="Subiendo"
-                    ) + queue_info
+                    )
 
                     try:
                         await progress_msg.edit_text(progress_message)
