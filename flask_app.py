@@ -1,11 +1,157 @@
 import os
 import time
-from flask import Flask, send_from_directory, jsonify
+from flask import Flask, send_from_directory, jsonify, render_template_string
 
 from config import BASE_DIR, RENDER_DOMAIN, MAX_FILE_SIZE_MB
 from load_manager import load_manager
 
 app = Flask(__name__)
+
+def get_directory_structure(startpath):
+    """Genera la estructura de directorios similar a la imagen"""
+    structure = []
+    try:
+        for root, dirs, files in os.walk(startpath):
+            level = root.replace(startpath, '').count(os.sep)
+            indent = ' ' * 2 * level
+            structure.append(f"{indent}📁 {os.path.basename(root)}/")
+            subindent = ' ' * 2 * (level + 1)
+            for file in files:
+                size = os.path.getsize(os.path.join(root, file))
+                size_str = format_file_size(size)
+                structure.append(f"{subindent}📄 {file} ({size_str})")
+    except Exception as e:
+        structure.append(f"Error reading directory: {str(e)}")
+    return structure
+
+def format_file_size(size):
+    """Formatea el tamaño del archivo"""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size < 1024.0:
+            return f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} TB"
+
+@app.route('/files')
+def file_browser():
+    """Navegador de archivos del servidor"""
+    try:
+        directory = BASE_DIR
+        if not os.path.exists(directory):
+            return "Directory not found", 404
+        
+        structure = get_directory_structure(directory)
+        
+        html_template = '''
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Nelson File2Link - Explorador de Archivos</title>
+            <style>
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                body { 
+                    font-family: 'Courier New', monospace; 
+                    background: #1a1a1a; 
+                    color: #00ff00; 
+                    padding: 20px;
+                    line-height: 1.6;
+                }
+                .container { max-width: 1200px; margin: 0 auto; }
+                .header { 
+                    text-align: center; 
+                    margin-bottom: 30px; 
+                    padding: 20px;
+                    background: #2a2a2a;
+                    border-radius: 10px;
+                    border: 1px solid #00ff00;
+                }
+                .header h1 { color: #00ff00; margin-bottom: 10px; }
+                .file-structure { 
+                    background: #2a2a2a; 
+                    padding: 20px; 
+                    border-radius: 10px;
+                    border: 1px solid #00ff00;
+                    white-space: pre;
+                    overflow-x: auto;
+                    font-size: 14px;
+                }
+                .folder { color: #ffff00; }
+                .file { color: #ffffff; }
+                .size { color: #888; }
+                .navigation { 
+                    margin-bottom: 20px; 
+                    text-align: center;
+                }
+                .btn { 
+                    display: inline-block;
+                    background: #00ff00;
+                    color: #000;
+                    padding: 10px 20px;
+                    margin: 0 10px;
+                    text-decoration: none;
+                    border-radius: 5px;
+                    font-weight: bold;
+                }
+                .stats {
+                    background: #2a2a2a;
+                    padding: 15px;
+                    border-radius: 10px;
+                    margin-bottom: 20px;
+                    border: 1px solid #00ff00;
+                }
+                .stats h3 { color: #00ff00; margin-bottom: 10px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🗂️ Explorador de Archivos - Nelson File2Link</h1>
+                    <p>Estructura completa del sistema de archivos</p>
+                </div>
+                
+                <div class="navigation">
+                    <a href="/" class="btn">🏠 Inicio</a>
+                    <a href="/system-status" class="btn">📊 Sistema</a>
+                    <a href="/files" class="btn">🔄 Actualizar</a>
+                </div>
+                
+                <div class="stats">
+                    <h3>📊 Estadísticas del Sistema</h3>
+                    <p><strong>Directorio Base:</strong> {{ base_dir }}</p>
+                    <p><strong>Total de Archivos:</strong> {{ total_files }}</p>
+                    <p><strong>Espacio Usado:</strong> {{ total_size }}</p>
+                </div>
+                
+                <div class="file-structure">
+                    {% for line in structure %}
+                        {{ line|safe }}
+                    {% endfor %}
+                </div>
+            </div>
+        </body>
+        </html>
+        '''
+        
+        # Calcular estadísticas
+        total_files = 0
+        total_size = 0
+        for root, dirs, files in os.walk(directory):
+            total_files += len(files)
+            for file in files:
+                file_path = os.path.join(root, file)
+                total_size += os.path.getsize(file_path)
+        
+        return render_template_string(html_template,
+            structure=structure,
+            base_dir=directory,
+            total_files=total_files,
+            total_size=format_file_size(total_size)
+        )
+        
+    except Exception as e:
+        return f"Error: {str(e)}", 500
 
 @app.route('/')
 def home():
@@ -210,6 +356,7 @@ def home():
                 <a href="https://t.me/nelson_file2link_bot" class="btn btn-telegram">🚀 Usar el Bot en Telegram</a>
                 <a href="/system-status" class="btn">📊 Estado del Sistema</a>
                 <a href="/health" class="btn">❤️ Health Check</a>
+                <a href="/files" class="btn">📁 Explorador de Archivos</a>
             </div>
 
             <div class="stats">
@@ -320,7 +467,8 @@ Sistema optimizado para baja CPU</div>
                 <div class="code">/health - Verificación de estado del servicio
 /system-status - Estado detallado del sistema
 /static/[user_id]/downloads/[archivo] - Descargar archivos
-/static/[user_id]/packed/[archivo] - Descargar archivos empaquetados</div>
+/static/[user_id]/packed/[archivo] - Descargar archivos empaquetados
+/files - Explorador de archivos del servidor</div>
             </div>
 
             <div class="info-section" style="text-align: center; background: #2c3e50; color: white;">
@@ -392,7 +540,8 @@ def system_status():
             "web_interface": "/",
             "health_check": "/health",
             "system_status": "/system-status",
-            "file_download": "/static/<user_id>/<folder>/<filename>"
+            "file_download": "/static/<user_id>/<folder>/<filename>",
+            "file_browser": "/files"
         }
     })
 
@@ -480,6 +629,7 @@ def not_found(error):
             "/",
             "/health", 
             "/system-status",
+            "/files",
             "/static/<user_id>/downloads/<filename>",
             "/static/<user_id>/packed/<filename>"
         ]
