@@ -146,11 +146,20 @@ async def cd_command(client, message):
         await message.reply_text("❌ Error al cambiar carpeta.")
 
 async def list_command(client, message):
-    """Maneja el comando /list - Listar archivos de la carpeta actual"""
+    """Maneja el comando /list - Listar archivos de la carpeta actual CON PAGINACIÓN"""
     try:
         user_id = message.from_user.id
         session = get_user_session(user_id)
         current_folder = session['current_folder']
+        
+        # Obtener argumentos para paginación
+        args = message.text.split()
+        page = 1
+        if len(args) > 1:
+            try:
+                page = int(args[1])
+            except ValueError:
+                page = 1
         
         files = file_service.list_user_files(user_id, current_folder)
         
@@ -163,20 +172,62 @@ async def list_command(client, message):
             )
             return
         
-        folder_display = "📥 DESCARGAS" if current_folder == "downloads" else "📦 EMPAQUETADOS"
-        files_text = f"**{folder_display}** ({len(files)} archivos)\n\n"
+        # Configurar paginación
+        items_per_page = 10
+        total_pages = (len(files) + items_per_page - 1) // items_per_page
+        page = max(1, min(page, total_pages))
         
-        for file_info in files:
+        start_idx = (page - 1) * items_per_page
+        end_idx = start_idx + items_per_page
+        page_files = files[start_idx:end_idx]
+        
+        folder_display = "📥 DESCARGAS" if current_folder == "downloads" else "📦 EMPAQUETADOS"
+        files_text = f"**{folder_display}** - Página {page}/{total_pages}\n"
+        files_text += f"**Total de archivos:** {len(files)}\n\n"
+        
+        for file_info in page_files:
             files_text += f"**#{file_info['number']}** - `{file_info['name']}`\n"
             files_text += f"📏 **Tamaño:** {file_info['size_mb']:.1f} MB\n"
             files_text += f"🔗 **Enlace:** [Descargar]({file_info['url']})\n\n"
 
-        files_text += f"**Comandos disponibles en esta carpeta:**\n"
+        # Información de paginación
+        if total_pages > 1:
+            files_text += f"**Navegación:**\n"
+            if page > 1:
+                files_text += f"• `/list {page-1}` - Página anterior\n"
+            if page < total_pages:
+                files_text += f"• `/list {page+1}` - Página siguiente\n"
+            files_text += f"• `/list <número>` - Ir a página específica\n"
+
+        files_text += f"\n**Comandos disponibles:**\n"
         files_text += f"• `/delete <número>` - Eliminar archivo\n"
         files_text += f"• `/rename <número> <nuevo_nombre>` - Renombrar\n"
         files_text += f"• `/clear` - Vaciar carpeta completa"
 
-        await message.reply_text(files_text, disable_web_page_preview=True)
+        # Verificar longitud del mensaje
+        if len(files_text) > 4000:
+            # Si es muy largo, dividir en partes
+            parts = []
+            current_part = ""
+            
+            for line in files_text.split('\n'):
+                if len(current_part + line + '\n') > 4000:
+                    parts.append(current_part)
+                    current_part = line + '\n'
+                else:
+                    current_part += line + '\n'
+            
+            if current_part:
+                parts.append(current_part)
+            
+            # Enviar primera parte
+            await message.reply_text(parts[0], disable_web_page_preview=True)
+            
+            # Enviar partes restantes
+            for part in parts[1:]:
+                await message.reply_text(part, disable_web_page_preview=True)
+        else:
+            await message.reply_text(files_text, disable_web_page_preview=True)
 
     except Exception as e:
         logger.error(f"Error en /list: {e}")
@@ -591,8 +642,10 @@ async def process_file_queue(client, user_id):
             user_queues[user_id] = []
 
 async def process_single_file(client, message, user_id, retry_count=0):
-    """Procesa un solo archivo con progreso actualizado - VERSIÓN CON REINTENTOS"""
+    """Procesa un solo archivo con progreso MEJORADO (con ETA y nombre)"""
     max_retries = 2
+    start_time = time.time()
+    
     try:
         # Obtener información del archivo
         file_obj = None
@@ -655,22 +708,20 @@ async def process_single_file(client, message, user_id, retry_count=0):
         file_number = file_service.register_file(user_id, original_filename, stored_filename, "downloads")
         logger.info(f"📝 Archivo registrado: #{file_number} - {original_filename} -> {stored_filename}")
 
-        start_time = time.time()
-        
         # Crear mensaje de progreso INDIVIDUAL para este archivo
         queue_info = ""
         if user_id in user_queues and len(user_queues[user_id]) > 1:
             queue_info = f"\n📋 **En cola:** {len(user_queues[user_id]) - 1} archivos restantes"
         
+        # ⬇️ ACTUALIZADO: Usar elapsed_time=0 y user_first_name
         initial_message = progress_service.create_progress_message(
             filename=original_filename,
             current=0,
             total=file_size,
             speed=0,
-            file_num=1,
-            total_files=1,
-            user_id=user_id,
-            process_type="Descargando"
+            elapsed_time=0,
+            user_first_name=message.from_user.first_name,
+            process_type="Subiendo"
         ) + queue_info
         
         progress_msg = await message.reply_text(initial_message)
@@ -693,15 +744,15 @@ async def process_single_file(client, message, user_id, retry_count=0):
                     if user_id in user_queues and len(user_queues[user_id]) > 1:
                         queue_info = f"\n📋 **En cola:** {len(user_queues[user_id]) - 1} archivos restantes"
                     
+                    # ⬇️ ACTUALIZADO: Incluir elapsed_time y user_first_name
                     progress_message = progress_service.create_progress_message(
                         filename=original_filename,
                         current=current,
                         total=total,
                         speed=speed,
-                        file_num=1,
-                        total_files=1,
-                        user_id=user_id,
-                        process_type="Descargando"
+                        elapsed_time=elapsed_time,
+                        user_first_name=message.from_user.first_name,
+                        process_type="Subiendo"
                     ) + queue_info
 
                     try:
