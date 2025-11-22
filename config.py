@@ -14,6 +14,6 @@ COMPRESSION_TIMEOUT = 600
 MAX_CONCURRENT_PROCESSES = 1
 CPU_USAGE_LIMIT = 80
 
-# ✅ NUEVO: Tamaño máximo de archivos configurable
+# ✅ Tamaño máximo de archivos configurable
 MAX_FILE_SIZE_MB = 2000  # 2000MB por defecto
 MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024  # Cálculo automático en bytes
