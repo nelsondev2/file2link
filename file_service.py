@@ -248,7 +248,7 @@ class FileService:
             return False, f"Error al renombrar: {str(e)}", None
 
     def delete_file_by_number(self, user_id, file_number, file_type="downloads"):
-        """Elimina un archivo por número (PERSISTENTE)"""
+        """Elimina un archivo por número y REASIGNA números"""
         try:
             user_key = f"{user_id}_{file_type}"
             if user_key not in self.metadata:
@@ -268,8 +268,29 @@ class FileService:
             if os.path.exists(file_path):
                 os.remove(file_path)
             
-            # NO eliminamos la entrada de metadata para mantener la numeración persistente
-            return True, f"Archivo #{file_number} '{file_data['original_name']}' eliminado"
+            # ELIMINAR la entrada de metadata y REASIGNAR números
+            del self.metadata[user_key]["files"][str(file_number)]
+            
+            # Reasignar números consecutivos
+            remaining_files = sorted(
+                [(int(num), data) for num, data in self.metadata[user_key]["files"].items()],
+                key=lambda x: x[0]
+            )
+            
+            # Resetear metadata
+            self.metadata[user_key]["files"] = {}
+            
+            # Reasignar números comenzando desde 1
+            new_number = 1
+            for old_num, file_data in remaining_files:
+                self.metadata[user_key]["files"][str(new_number)] = file_data
+                new_number += 1
+            
+            # Actualizar next_number
+            self.metadata[user_key]["next_number"] = new_number
+            self.save_metadata()
+            
+            return True, f"Archivo #{file_number} '{file_data['original_name']}' eliminado y números reasignados"
             
         except Exception as e:
             logger.error(f"Error eliminando archivo: {e}")
@@ -294,7 +315,13 @@ class FileService:
                     os.remove(file_path)
                     deleted_count += 1
             
-            return True, f"Se eliminaron {deleted_count} archivos {file_type}"
+            # Resetear metadata para este tipo de archivo
+            user_key = f"{user_id}_{file_type}"
+            if user_key in self.metadata:
+                self.metadata[user_key] = {"next_number": 1, "files": {}}
+                self.save_metadata()
+            
+            return True, f"Se eliminaron {deleted_count} archivos {file_type} y se resetearon los números"
             
         except Exception as e:
             logger.error(f"Error eliminando todos los archivos: {e}")
