@@ -31,9 +31,9 @@ def start_web_server():
 
 if __name__ == '__main__':
     # Crear directorios necesarios
-    os.makedirs(BASE_DIR, exist_ok=True)
+    os.makedirs(BASE_DIR, exist_ok=True)  # ⬅️ BASE_DIR ahora es "storage"
     
-    logger.info("Directorios creados/verificados: static")
+    logger.info(f"Directorios creados/verificados: {BASE_DIR}")
 
     bot_thread = threading.Thread(target=start_telegram_bot, daemon=True)
     bot_thread.start()
