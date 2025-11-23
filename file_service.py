@@ -68,17 +68,17 @@ class FileService:
         """Crea una URL de descarga válida"""
         safe_filename = self.sanitize_filename(filename)
         encoded_filename = urllib.parse.quote(safe_filename)
-        return f"{RENDER_DOMAIN}/static/{user_id}/downloads/{encoded_filename}"
+        return f"{RENDER_DOMAIN}/storage/{user_id}/downloads/{encoded_filename}"  # ⬅️ CAMBIADO: static → storage
 
     def create_packed_url(self, user_id, filename):
         """Crea una URL para archivos empaquetados"""
         safe_filename = self.sanitize_filename(filename)
         encoded_filename = urllib.parse.quote(safe_filename)
-        return f"{RENDER_DOMAIN}/static/{user_id}/packed/{encoded_filename}"
+        return f"{RENDER_DOMAIN}/storage/{user_id}/packed/{encoded_filename}"  # ⬅️ CAMBIADO: static → storage
 
     def get_user_directory(self, user_id, file_type="downloads"):
         """Obtiene el directorio del usuario"""
-        user_dir = os.path.join(BASE_DIR, str(user_id), file_type)
+        user_dir = os.path.join(BASE_DIR, str(user_id), file_type)  # ⬅️ BASE_DIR ahora es "storage"
         os.makedirs(user_dir, exist_ok=True)
         return user_dir
 
