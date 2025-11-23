@@ -4,6 +4,7 @@ from flask import Flask, send_from_directory, jsonify, render_template_string
 
 from config import BASE_DIR, RENDER_DOMAIN, MAX_FILE_SIZE_MB
 from load_manager import load_manager
+from file_service import file_service
 
 app = Flask(__name__)
 
@@ -547,9 +548,20 @@ def system_status():
 
 @app.route('/storage/<path:path>')  # ⬅️ CAMBIADO: static → storage
 def serve_static(path):
-    """Sirve archivos estáticos de forma genérica"""
+    """Sirve archivos estáticos de forma genérica forzando la descarga"""
     try:
-        return send_from_directory(BASE_DIR, path)
+        # Extraer el nombre del archivo del path
+        filename = os.path.basename(path)
+        
+        # Servir el archivo
+        response = send_from_directory(BASE_DIR, path)
+        
+        # Configurar headers para forzar descarga
+        response.headers["Content-Disposition"] = f"attachment; filename=\"{filename}\""
+        response.headers["Content-Type"] = "application/octet-stream"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        
+        return response
     except Exception as e:
         return jsonify({
             "error": "Archivo no encontrado",
@@ -559,7 +571,7 @@ def serve_static(path):
 
 @app.route('/storage/<user_id>/downloads/<filename>')  # ⬅️ CAMBIADO: static → storage
 def serve_download(user_id, filename):
-    """Sirve archivos de descarga con nombre original"""
+    """Sirve archivos de descarga forzando la descarga"""
     try:
         user_download_dir = os.path.join(BASE_DIR, user_id, "downloads")
         
@@ -579,8 +591,18 @@ def serve_download(user_id, filename):
                 "user_id": user_id
             }), 404
         
-        # Servir el archivo
-        return send_from_directory(user_download_dir, filename)
+        # Obtener el nombre original del archivo desde la metadata
+        original_filename = file_service.get_original_filename(user_id, filename, "downloads")
+        
+        # Servir el archivo forzando la descarga
+        response = send_from_directory(user_download_dir, filename)
+        
+        # Configurar headers para forzar descarga
+        response.headers["Content-Disposition"] = f"attachment; filename=\"{original_filename}\""
+        response.headers["Content-Type"] = "application/octet-stream"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        
+        return response
         
     except Exception as e:
         return jsonify({
@@ -590,7 +612,7 @@ def serve_download(user_id, filename):
 
 @app.route('/storage/<user_id>/packed/<filename>')  # ⬅️ CAMBIADO: static → storage
 def serve_packed(user_id, filename):
-    """Sirve archivos empaquetados"""
+    """Sirve archivos empaquetados forzando la descarga"""
     try:
         user_packed_dir = os.path.join(BASE_DIR, user_id, "packed")
         
@@ -610,8 +632,18 @@ def serve_packed(user_id, filename):
                 "user_id": user_id
             }), 404
         
-        # Servir el archivo
-        return send_from_directory(user_packed_dir, filename)
+        # Obtener el nombre original del archivo desde la metadata
+        original_filename = file_service.get_original_filename(user_id, filename, "packed")
+        
+        # Servir el archivo forzando la descarga
+        response = send_from_directory(user_packed_dir, filename)
+        
+        # Configurar headers para forzar descarga
+        response.headers["Content-Disposition"] = f"attachment; filename=\"{original_filename}\""
+        response.headers["Content-Type"] = "application/octet-stream"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        
+        return response
         
     except Exception as e:
         return jsonify({
