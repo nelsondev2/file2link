@@ -20,6 +20,7 @@ user_sessions = {}  # {user_id: {'current_folder': 'downloads'}}
 user_queues = {}    # {user_id: [message1, message2, ...]}
 user_progress_msgs = {}  # {user_id: {message_id: progress_message}}
 user_current_processing = {}  # {user_id: current_message_id}
+user_queue_totals = {}  # ⬅️ NUEVO: Para llevar cuenta del total de archivos en cola
 
 def get_user_session(user_id):
     """Obtiene o crea la sesión del usuario"""
@@ -538,6 +539,10 @@ async def clear_queue_command(client, message):
         if user_id in user_current_processing:
             del user_current_processing[user_id]
         
+        # Limpiar también el total de la cola
+        if user_id in user_queue_totals:
+            del user_queue_totals[user_id]
+        
         await message.reply_text(f"🗑️ **Cola limpiada**\n\nSe removieron {queue_size} archivos de la cola.")
         
     except Exception as e:
@@ -618,6 +623,10 @@ async def handle_file(client, message):
 async def process_file_queue(client, user_id):
     """Procesa la cola de archivos del usuario de manera secuencial - VERSIÓN MEJORADA"""
     try:
+        # ⬅️ NUEVO: Guardar el total inicial de archivos en cola
+        if user_id not in user_queue_totals:
+            user_queue_totals[user_id] = len(user_queues[user_id])
+        
         while user_queues.get(user_id) and user_queues[user_id]:
             message = user_queues[user_id][0]
             logger.info(f"🔄 Procesando archivo en cola para usuario {user_id}, archivos restantes: {len(user_queues[user_id])}")
@@ -626,15 +635,21 @@ async def process_file_queue(client, user_id):
             
             # Pequeña pausa entre archivos para evitar sobrecarga
             await asyncio.sleep(1)
+        
+        # ⬅️ NUEVO: Limpiar el total cuando se vacíe la cola
+        if user_id in user_queue_totals:
+            del user_queue_totals[user_id]
                 
     except Exception as e:
         logger.error(f"Error en process_file_queue: {e}", exc_info=True)
         # Limpiar cola en caso de error
         if user_id in user_queues:
             user_queues[user_id] = []
+        if user_id in user_queue_totals:
+            del user_queue_totals[user_id]
 
 async def process_single_file(client, message, user_id, retry_count=0):
-    """Procesa un solo archivo con progreso MEJORADO (sin tiempo transcurrido)"""
+    """Procesa un solo archivo con progreso MEJORADO (con posición en cola)"""
     max_retries = 2
     start_time = time.time()
     
@@ -700,15 +715,20 @@ async def process_single_file(client, message, user_id, retry_count=0):
         file_number = file_service.register_file(user_id, original_filename, stored_filename, "downloads")
         logger.info(f"📝 Archivo registrado: #{file_number} - {original_filename} -> {stored_filename}")
 
+        # ⬅️ NUEVO: Calcular posición en cola
+        total_files = user_queue_totals.get(user_id, 1)
+        current_file = total_files - len(user_queues[user_id]) + 1
+
         # Crear mensaje de progreso INDIVIDUAL para este archivo
-        # ⬇️ ELIMINADO: queue_info del mensaje inicial
         initial_message = progress_service.create_progress_message(
             filename=original_filename,
             current=0,
             total=file_size,
             speed=0,
             user_first_name=message.from_user.first_name,
-            process_type="Subiendo"
+            process_type="Subiendo",
+            current_file=current_file,  # ⬅️ NUEVO: posición actual
+            total_files=total_files     # ⬅️ NUEVO: total en cola
         )
         
         progress_msg = await message.reply_text(initial_message)
@@ -727,14 +747,18 @@ async def process_single_file(client, message, user_id, retry_count=0):
                 last_update = progress_data.get('last_update', 0)
 
                 if current_time - last_update >= 2 or current == total:
-                    # ⬇️ ELIMINADO: queue_info del mensaje de progreso
+                    # ⬅️ NUEVO: Recalcular posición en cada actualización
+                    current_file = total_files - len(user_queues[user_id]) + 1
+                    
                     progress_message = progress_service.create_progress_message(
                         filename=original_filename,
                         current=current,
                         total=total,
                         speed=speed,
                         user_first_name=message.from_user.first_name,
-                        process_type="Subiendo"
+                        process_type="Subiendo",
+                        current_file=current_file,  # ⬅️ NUEVO: posición actual
+                        total_files=total_files     # ⬅️ NUEVO: total en cola
                     )
 
                     try:
