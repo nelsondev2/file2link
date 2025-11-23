@@ -424,7 +424,7 @@ def home():
                 <p>4. <strong>Gestiona tus archivos</strong> fácilmente desde cualquier dispositivo</p>
 
                 <h3>🔗 Ejemplo de enlace de descarga:</h3>
-                <div class="code">https://nelson-file2link.onrender.com/static/123456/downloads/mi_archivo.pdf</div>
+                <div class="code">https://nelson-file2link.onrender.com/storage/123456/downloads/mi_archivo.pdf</div>  <!-- ⬅️ CAMBIADO: static → storage -->
                 
                 <h3>📁 Sistema de Carpetas:</h3>
                 <div class="code">/cd downloads - Acceder a archivos de descarga
@@ -466,8 +466,8 @@ Sistema optimizado para baja CPU</div>
                 <h3>🔧 Endpoints del API:</h3>
                 <div class="code">/health - Verificación de estado del servicio
 /system-status - Estado detallado del sistema
-/static/[user_id]/downloads/[archivo] - Descargar archivos
-/static/[user_id]/packed/[archivo] - Descargar archivos empaquetados
+/storage/[user_id]/downloads/[archivo] - Descargar archivos  <!-- ⬅️ CAMBIADO: static → storage -->
+/storage/[user_id]/packed/[archivo] - Descargar archivos empaquetados  <!-- ⬅️ CAMBIADO: static → storage -->
 /files - Explorador de archivos del servidor</div>
             </div>
 
@@ -540,12 +540,12 @@ def system_status():
             "web_interface": "/",
             "health_check": "/health",
             "system_status": "/system-status",
-            "file_download": "/static/<user_id>/<folder>/<filename>",
+            "file_download": "/storage/<user_id>/<folder>/<filename>",  # ⬅️ CAMBIADO: static → storage
             "file_browser": "/files"
         }
     })
 
-@app.route('/static/<path:path>')
+@app.route('/storage/<path:path>')  # ⬅️ CAMBIADO: static → storage
 def serve_static(path):
     """Sirve archivos estáticos de forma genérica"""
     try:
@@ -557,7 +557,7 @@ def serve_static(path):
             "message": str(e)
         }), 404
 
-@app.route('/static/<user_id>/downloads/<filename>')
+@app.route('/storage/<user_id>/downloads/<filename>')  # ⬅️ CAMBIADO: static → storage
 def serve_download(user_id, filename):
     """Sirve archivos de descarga con nombre original"""
     try:
@@ -588,7 +588,7 @@ def serve_download(user_id, filename):
             "message": str(e)
         }), 500
 
-@app.route('/static/<user_id>/packed/<filename>')
+@app.route('/storage/<user_id>/packed/<filename>')  # ⬅️ CAMBIADO: static → storage
 def serve_packed(user_id, filename):
     """Sirve archivos empaquetados"""
     try:
@@ -630,8 +630,8 @@ def not_found(error):
             "/health", 
             "/system-status",
             "/files",
-            "/static/<user_id>/downloads/<filename>",
-            "/static/<user_id>/packed/<filename>"
+            "/storage/<user_id>/downloads/<filename>",  # ⬅️ CAMBIADO: static → storage
+            "/storage/<user_id>/packed/<filename>"  # ⬅️ CAMBIADO: static → storage
         ]
     }), 404
 
