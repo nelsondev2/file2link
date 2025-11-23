@@ -194,6 +194,18 @@ class FileService:
             'file_type': file_type
         }
 
+    def get_original_filename(self, user_id, stored_filename, file_type="downloads"):
+        """Obtiene el nombre original del archivo basado en el nombre almacenado"""
+        user_key = f"{user_id}_{file_type}"
+        if user_key not in self.metadata:
+            return stored_filename
+        
+        for file_data in self.metadata[user_key]["files"].values():
+            if file_data["stored_name"] == stored_filename:
+                return file_data["original_name"]
+        
+        return stored_filename
+
     def rename_file(self, user_id, file_number, new_name, file_type="downloads"):
         """Renombra un archivo"""
         try:
