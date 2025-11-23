@@ -34,8 +34,8 @@ class ProgressService:
             minutes = int((eta_seconds % 3600) // 60)
             return f"{hours}h {minutes}m"
 
-    def create_progress_message(self, filename, current, total, speed=0, user_first_name=None, process_type="Subiendo"):
-        """Crea el mensaje de progreso con ETA y nombre de usuario (SIN tiempo transcurrido)"""
+    def create_progress_message(self, filename, current, total, speed=0, user_first_name=None, process_type="Subiendo", current_file=1, total_files=1):
+        """Crea el mensaje de progreso con ETA, nombre y posición en cola"""
         if len(filename) > 25:
             display_name = filename[:22] + "..."
         else:
@@ -54,6 +54,7 @@ class ProgressService:
         message += f"**📊 Progreso:** {processed} / {total_size}\n"
         message += f"**⚡ Velocidad:** {speed_str}\n"
         message += f"**🕐 ETA:** {eta}\n"
+        message += f"**📋 En cola:** {current_file}/{total_files}\n"  # ⬅️ NUEVO: posición en cola
         if user_first_name:
             message += f"**👤 Usuario:** {user_first_name}"
 
