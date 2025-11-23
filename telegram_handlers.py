@@ -20,7 +20,7 @@ user_sessions = {}  # {user_id: {'current_folder': 'downloads'}}
 user_queues = {}    # {user_id: [message1, message2, ...]}
 user_progress_msgs = {}  # {user_id: {message_id: progress_message}}
 user_current_processing = {}  # {user_id: current_message_id}
-user_queue_positions = {}  # ⬅️ NUEVO: Para llevar el control correcto de posiciones
+user_batch_totals = {}  # ⬅️ NUEVO: Para llevar el control del total por lote
 
 def get_user_session(user_id):
     """Obtiene o crea la sesión del usuario"""
@@ -539,9 +539,9 @@ async def clear_queue_command(client, message):
         if user_id in user_current_processing:
             del user_current_processing[user_id]
         
-        # Limpiar también las posiciones de la cola
-        if user_id in user_queue_positions:
-            del user_queue_positions[user_id]
+        # Limpiar también los totales de lote
+        if user_id in user_batch_totals:
+            del user_batch_totals[user_id]
         
         await message.reply_text(f"🗑️ **Cola limpiada**\n\nSe removieron {queue_size} archivos de la cola.")
         
@@ -608,10 +608,10 @@ async def handle_file(client, message):
         # Agregar mensaje a la cola
         user_queues[user_id].append(message)
         
-        # Si es el primer archivo en la cola, procesar inmediatamente
+        # ⬅️ CORREGIDO: Solo iniciar procesamiento si es el primer archivo
+        # No reiniciar el procesamiento si ya hay un lote en curso
         if len(user_queues[user_id]) == 1:
             await process_file_queue(client, user_id)
-        # ⬇️ ELIMINADO: No mostrar mensaje de "archivo agregado a la cola"
         
     except Exception as e:
         logger.error(f"Error procesando archivo: {e}", exc_info=True)
@@ -623,37 +623,36 @@ async def handle_file(client, message):
 async def process_file_queue(client, user_id):
     """Procesa la cola de archivos del usuario de manera secuencial - VERSIÓN CORREGIDA"""
     try:
-        # ⬅️ NUEVO: Inicializar posiciones para este usuario
-        user_queue_positions[user_id] = {
-            'total_files': len(user_queues[user_id]),
-            'current_position': 0
-        }
+        # ⬅️ CORREGIDO: Guardar el total del lote actual
+        total_files_in_batch = len(user_queues[user_id])
+        user_batch_totals[user_id] = total_files_in_batch
+        
+        current_position = 0
         
         while user_queues.get(user_id) and user_queues[user_id]:
             message = user_queues[user_id][0]
-            logger.info(f"🔄 Procesando archivo en cola para usuario {user_id}, archivos restantes: {len(user_queues[user_id])}")
+            current_position += 1
             
-            # ⬅️ NUEVO: Incrementar posición actual
-            user_queue_positions[user_id]['current_position'] += 1
+            logger.info(f"🔄 Procesando archivo {current_position}/{total_files_in_batch} para usuario {user_id}")
             
-            await process_single_file(client, message, user_id)
+            await process_single_file(client, message, user_id, current_position, total_files_in_batch)
             
             # Pequeña pausa entre archivos para evitar sobrecarga
             await asyncio.sleep(1)
         
-        # ⬅️ NUEVO: Limpiar posiciones cuando se vacíe la cola
-        if user_id in user_queue_positions:
-            del user_queue_positions[user_id]
+        # ⬅️ CORREGIDO: Limpiar el total del lote cuando se complete
+        if user_id in user_batch_totals:
+            del user_batch_totals[user_id]
                 
     except Exception as e:
         logger.error(f"Error en process_file_queue: {e}", exc_info=True)
         # Limpiar cola en caso de error
         if user_id in user_queues:
             user_queues[user_id] = []
-        if user_id in user_queue_positions:
-            del user_queue_positions[user_id]
+        if user_id in user_batch_totals:
+            del user_batch_totals[user_id]
 
-async def process_single_file(client, message, user_id, retry_count=0):
+async def process_single_file(client, message, user_id, current_position, total_files):
     """Procesa un solo archivo con progreso MEJORADO (con posición en cola CORREGIDA)"""
     max_retries = 2
     start_time = time.time()
@@ -720,14 +719,6 @@ async def process_single_file(client, message, user_id, retry_count=0):
         file_number = file_service.register_file(user_id, original_filename, stored_filename, "downloads")
         logger.info(f"📝 Archivo registrado: #{file_number} - {original_filename} -> {stored_filename}")
 
-        # ⬅️ CORREGIDO: Obtener posición actual y total de forma correcta
-        current_position = 1
-        total_files = 1
-        
-        if user_id in user_queue_positions:
-            current_position = user_queue_positions[user_id]['current_position']
-            total_files = user_queue_positions[user_id]['total_files']
-
         # Crear mensaje de progreso INDIVIDUAL para este archivo
         initial_message = progress_service.create_progress_message(
             filename=original_filename,
@@ -736,8 +727,8 @@ async def process_single_file(client, message, user_id, retry_count=0):
             speed=0,
             user_first_name=message.from_user.first_name,
             process_type="Subiendo",
-            current_file=current_position,  # ⬅️ CORREGIDO: posición actual
-            total_files=total_files         # ⬅️ CORREGIDO: total en cola
+            current_file=current_position,  # ⬅️ CORREGIDO: posición actual en el lote
+            total_files=total_files         # ⬅️ CORREGIDO: total del lote
         )
         
         progress_msg = await message.reply_text(initial_message)
@@ -789,7 +780,7 @@ async def process_single_file(client, message, user_id, retry_count=0):
                 if retry_count < max_retries:
                     logger.warning(f"Reintentando descarga (intento {retry_count + 1})")
                     await asyncio.sleep(2)
-                    await process_single_file(client, message, user_id, retry_count + 1)
+                    await process_single_file(client, message, user_id, current_position, total_files)
                     return
                 else:
                     await progress_msg.edit_text("❌ Error: El archivo no se descargó correctamente después de varios intentos.")
@@ -845,7 +836,7 @@ async def process_single_file(client, message, user_id, retry_count=0):
             if retry_count < max_retries:
                 logger.info(f"Reintentando descarga (intento {retry_count + 1})")
                 await asyncio.sleep(2)
-                await process_single_file(client, message, user_id, retry_count + 1)
+                await process_single_file(client, message, user_id, current_position, total_files)
                 return
             else:
                 await progress_msg.edit_text(f"❌ Error al descargar el archivo después de {max_retries + 1} intentos: {str(download_error)}")
@@ -854,7 +845,7 @@ async def process_single_file(client, message, user_id, retry_count=0):
         if user_id in user_queues and user_queues[user_id]:
             user_queues[user_id].pop(0)
             
-        # Limpiar mensaje de procesamiento actual
+        # Limpiar mensaje de progreso actual
         if user_id in user_current_processing:
             del user_current_processing[user_id]
 
