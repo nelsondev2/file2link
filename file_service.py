@@ -68,17 +68,23 @@ class FileService:
         """Crea una URL de descarga válida"""
         safe_filename = self.sanitize_filename(filename)
         encoded_filename = urllib.parse.quote(safe_filename)
-        return f"{RENDER_DOMAIN}/storage/{user_id}/downloads/{encoded_filename}"  # ⬅️ CAMBIADO: static → storage
+        return f"{RENDER_DOMAIN}/storage/{user_id}/downloads/{encoded_filename}"
+
+    def create_fast_download_url(self, user_id, filename):
+        """Crea una URL de descarga ultra rápida"""
+        safe_filename = self.sanitize_filename(filename)
+        encoded_filename = urllib.parse.quote(safe_filename)
+        return f"{RENDER_DOMAIN}/fast/{user_id}/downloads/{encoded_filename}"
 
     def create_packed_url(self, user_id, filename):
         """Crea una URL para archivos empaquetados"""
         safe_filename = self.sanitize_filename(filename)
         encoded_filename = urllib.parse.quote(safe_filename)
-        return f"{RENDER_DOMAIN}/storage/{user_id}/packed/{encoded_filename}"  # ⬅️ CAMBIADO: static → storage
+        return f"{RENDER_DOMAIN}/storage/{user_id}/packed/{encoded_filename}"
 
     def get_user_directory(self, user_id, file_type="downloads"):
         """Obtiene el directorio del usuario"""
-        user_dir = os.path.join(BASE_DIR, str(user_id), file_type)  # ⬅️ BASE_DIR ahora es "storage"
+        user_dir = os.path.join(BASE_DIR, str(user_id), file_type)
         os.makedirs(user_dir, exist_ok=True)
         return user_dir
 
@@ -129,8 +135,10 @@ class FileService:
                     size = os.path.getsize(file_path)
                     if file_type == "downloads":
                         download_url = self.create_download_url(user_id, file_data["stored_name"])
+                        fast_download_url = self.create_fast_download_url(user_id, file_data["stored_name"])
                     else:
                         download_url = self.create_packed_url(user_id, file_data["stored_name"])
+                        fast_download_url = download_url
                     
                     files.append({
                         'number': file_number,
@@ -139,18 +147,19 @@ class FileService:
                         'size': size,
                         'size_mb': size / (1024 * 1024),
                         'url': download_url,
-                        'file_type': file_type
+                        'fast_url': fast_download_url if file_type == "downloads" else download_url,
+                        'file_type': file_type,
+                        'download_speed_optimized': True
                     })
         
         return files
 
     def register_file(self, user_id, original_name, stored_name, file_type="downloads"):
-        """Registra un archivo en la metadata con número PERSISTENTE - CORREGIDO"""
+        """Registra un archivo en la metadata con número PERSISTENTE"""
         user_key = f"{user_id}_{file_type}"
         if user_key not in self.metadata:
             self.metadata[user_key] = {"next_number": 1, "files": {}}
         
-        # CORREGIDO: Usar el número actual SIN restar 1
         file_num = self.metadata[user_key]["next_number"]
         self.metadata[user_key]["next_number"] += 1
         
@@ -182,8 +191,10 @@ class FileService:
         
         if file_type == "downloads":
             download_url = self.create_download_url(user_id, file_data["stored_name"])
+            fast_download_url = self.create_fast_download_url(user_id, file_data["stored_name"])
         else:
             download_url = self.create_packed_url(user_id, file_data["stored_name"])
+            fast_download_url = download_url
         
         return {
             'number': file_number,
@@ -191,7 +202,9 @@ class FileService:
             'stored_name': file_data["stored_name"],
             'path': file_path,
             'url': download_url,
-            'file_type': file_type
+            'fast_url': fast_download_url,
+            'file_type': file_type,
+            'download_speed_optimized': True
         }
 
     def get_original_filename(self, user_id, stored_filename, file_type="downloads"):
@@ -250,14 +263,16 @@ class FileService:
             
             if file_type == "downloads":
                 new_url = self.create_download_url(user_id, new_stored_name)
+                new_fast_url = self.create_fast_download_url(user_id, new_stored_name)
             else:
                 new_url = self.create_packed_url(user_id, new_stored_name)
+                new_fast_url = new_url
             
-            return True, f"Archivo renombrado a: {new_name}", new_url
+            return True, f"Archivo renombrado a: {new_name}", new_url, new_fast_url
             
         except Exception as e:
             logger.error(f"Error renombrando archivo: {e}")
-            return False, f"Error al renombrar: {str(e)}", None
+            return False, f"Error al renombrar: {str(e)}", None, None
 
     def delete_file_by_number(self, user_id, file_number, file_type="downloads"):
         """Elimina un archivo por número y REASIGNA números"""
