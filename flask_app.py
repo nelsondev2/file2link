@@ -1,12 +1,25 @@
 import os
 import time
-from flask import Flask, send_from_directory, jsonify, render_template_string
+import mimetypes
+from flask import Flask, send_from_directory, jsonify, render_template_string, Response, send_file
 
-from config import BASE_DIR, RENDER_DOMAIN, MAX_FILE_SIZE_MB
+from config import BASE_DIR, RENDER_DOMAIN, MAX_FILE_SIZE_MB, CHUNK_SIZE, SENDFILE_BUFFER_SIZE
 from load_manager import load_manager
 from file_service import file_service
 
 app = Flask(__name__)
+
+# ===== CONFIGURACIÓN DE PERFORMANCE =====
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE_MB * 1024 * 1024
+app.config['TEMPLATES_AUTO_RELOAD'] = False
+app.config['EXPLAIN_TEMPLATE_LOADING'] = False
+app.config['PREFERRED_URL_SCHEME'] = 'https'
+app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
+app.config['JSON_SORT_KEYS'] = False
+
+# Configurar mimetypes para mejor detección
+mimetypes.init()
 
 def get_directory_structure(startpath):
     """Genera la estructura de directorios similar a la imagen"""
@@ -425,7 +438,7 @@ def home():
                 <p>4. <strong>Gestiona tus archivos</strong> fácilmente desde cualquier dispositivo</p>
 
                 <h3>🔗 Ejemplo de enlace de descarga:</h3>
-                <div class="code">https://nelson-file2link.onrender.com/storage/123456/downloads/mi_archivo.pdf</div>  <!-- ⬅️ CAMBIADO: static → storage -->
+                <div class="code">https://nelson-file2link.onrender.com/storage/123456/downloads/mi_archivo.pdf</div>
                 
                 <h3>📁 Sistema de Carpetas:</h3>
                 <div class="code">/cd downloads - Acceder a archivos de descarga
@@ -467,8 +480,8 @@ Sistema optimizado para baja CPU</div>
                 <h3>🔧 Endpoints del API:</h3>
                 <div class="code">/health - Verificación de estado del servicio
 /system-status - Estado detallado del sistema
-/storage/[user_id]/downloads/[archivo] - Descargar archivos  <!-- ⬅️ CAMBIADO: static → storage -->
-/storage/[user_id]/packed/[archivo] - Descargar archivos empaquetados  <!-- ⬅️ CAMBIADO: static → storage -->
+/storage/[user_id]/downloads/[archivo] - Descargar archivos
+/storage/[user_id]/packed/[archivo] - Descargar archivos empaquetados
 /files - Explorador de archivos del servidor</div>
             </div>
 
@@ -492,7 +505,9 @@ def health():
         "bot_status": "running",
         "timestamp": time.time(),
         "version": "2.0.0",
-        "max_file_size_mb": MAX_FILE_SIZE_MB
+        "max_file_size_mb": MAX_FILE_SIZE_MB,
+        "optimized_for_speed": True,
+        "chunk_size_mb": CHUNK_SIZE / (1024 * 1024)
     })
 
 @app.route('/system-status')
@@ -535,18 +550,21 @@ def system_status():
             "max_concurrent_processes": load_manager.max_processes,
             "cpu_usage_limit": status.get('cpu_percent', 0),
             "memory_usage_percent": status.get('memory_percent', 0),
-            "optimized_for": "low-cpu-environment"
+            "chunk_size_mb": CHUNK_SIZE / (1024 * 1024),
+            "sendfile_buffer_mb": SENDFILE_BUFFER_SIZE / (1024 * 1024),
+            "optimized_for": "high-speed-downloads"
         },
         "endpoints": {
             "web_interface": "/",
             "health_check": "/health",
             "system_status": "/system-status",
-            "file_download": "/storage/<user_id>/<folder>/<filename>",  # ⬅️ CAMBIADO: static → storage
+            "file_download": "/storage/<user_id>/<folder>/<filename>",
+            "fast_download": "/fast/<user_id>/downloads/<filename>",
             "file_browser": "/files"
         }
     })
 
-@app.route('/storage/<path:path>')  # ⬅️ CAMBIADO: static → storage
+@app.route('/storage/<path:path>')
 def serve_static(path):
     """Sirve archivos estáticos de forma genérica forzando la descarga"""
     try:
@@ -569,20 +587,18 @@ def serve_static(path):
             "message": str(e)
         }), 404
 
-@app.route('/storage/<user_id>/downloads/<filename>')  # ⬅️ CAMBIADO: static → storage
+@app.route('/storage/<user_id>/downloads/<filename>')
 def serve_download(user_id, filename):
-    """Sirve archivos de descarga forzando la descarga"""
+    """Sirve archivos de descarga con streaming optimizado para máxima velocidad"""
     try:
         user_download_dir = os.path.join(BASE_DIR, user_id, "downloads")
         
-        # Verificar que el directorio existe
         if not os.path.exists(user_download_dir):
             return jsonify({
                 "error": "Usuario no encontrado",
                 "user_id": user_id
             }), 404
         
-        # Verificar que el archivo existe
         file_path = os.path.join(user_download_dir, filename)
         if not os.path.exists(file_path):
             return jsonify({
@@ -591,39 +607,71 @@ def serve_download(user_id, filename):
                 "user_id": user_id
             }), 404
         
-        # Obtener el nombre original del archivo desde la metadata
+        # Obtener el nombre original del archivo
         original_filename = file_service.get_original_filename(user_id, filename, "downloads")
         
-        # Servir el archivo forzando la descarga
-        response = send_from_directory(user_download_dir, filename)
+        # Obtener información del archivo
+        file_size = os.path.getsize(file_path)
         
-        # Configurar headers para forzar descarga
-        response.headers["Content-Disposition"] = f"attachment; filename=\"{original_filename}\""
-        response.headers["Content-Type"] = "application/octet-stream"
+        # Detectar tipo MIME
+        mime_type, _ = mimetypes.guess_type(file_path)
+        if not mime_type:
+            mime_type = 'application/octet-stream'
+        
+        # Función para generar chunks optimizados
+        def generate():
+            with open(file_path, 'rb') as f:
+                while True:
+                    chunk = f.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    yield chunk
+        
+        # Crear respuesta con streaming
+        response = Response(
+            generate(),
+            mimetype=mime_type,
+            direct_passthrough=True
+        )
+        
+        # Configurar headers para mejor rendimiento
+        response.headers["Content-Length"] = str(file_size)
+        response.headers["Content-Disposition"] = f'attachment; filename="{original_filename}"'
+        response.headers["Accept-Ranges"] = "bytes"
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
         response.headers["X-Content-Type-Options"] = "nosniff"
+        
+        # Headers para optimización de transferencia
+        response.headers["X-Accel-Buffering"] = "no"
+        response.headers["Connection"] = "keep-alive"
+        response.headers["Keep-Alive"] = "timeout=10, max=1000"
+        response.headers["X-Sendfile"] = "enabled"
         
         return response
         
     except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error sirviendo archivo: {e}")
         return jsonify({
             "error": "Error interno del servidor",
             "message": str(e)
         }), 500
 
-@app.route('/storage/<user_id>/packed/<filename>')  # ⬅️ CAMBIADO: static → storage
+@app.route('/storage/<user_id>/packed/<filename>')
 def serve_packed(user_id, filename):
-    """Sirve archivos empaquetados forzando la descarga"""
+    """Sirve archivos empaquetados con streaming optimizado"""
     try:
         user_packed_dir = os.path.join(BASE_DIR, user_id, "packed")
         
-        # Verificar que el directorio existe
         if not os.path.exists(user_packed_dir):
             return jsonify({
                 "error": "Usuario no encontrado o sin archivos empaquetados",
                 "user_id": user_id
             }), 404
         
-        # Verificar que el archivo existe
         file_path = os.path.join(user_packed_dir, filename)
         if not os.path.exists(file_path):
             return jsonify({
@@ -632,24 +680,78 @@ def serve_packed(user_id, filename):
                 "user_id": user_id
             }), 404
         
-        # Obtener el nombre original del archivo desde la metadata
         original_filename = file_service.get_original_filename(user_id, filename, "packed")
+        file_size = os.path.getsize(file_path)
+        mime_type, _ = mimetypes.guess_type(file_path)
+        if not mime_type:
+            mime_type = 'application/octet-stream'
         
-        # Servir el archivo forzando la descarga
-        response = send_from_directory(user_packed_dir, filename)
+        def generate():
+            with open(file_path, 'rb') as f:
+                while True:
+                    chunk = f.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    yield chunk
         
-        # Configurar headers para forzar descarga
-        response.headers["Content-Disposition"] = f"attachment; filename=\"{original_filename}\""
-        response.headers["Content-Type"] = "application/octet-stream"
+        response = Response(
+            generate(),
+            mimetype=mime_type,
+            direct_passthrough=True
+        )
+        
+        response.headers["Content-Length"] = str(file_size)
+        response.headers["Content-Disposition"] = f'attachment; filename="{original_filename}"'
+        response.headers["Accept-Ranges"] = "bytes"
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
         response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Accel-Buffering"] = "no"
+        response.headers["Connection"] = "keep-alive"
+        response.headers["Keep-Alive"] = "timeout=10, max=1000"
+        response.headers["X-Sendfile"] = "enabled"
         
         return response
         
     except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error sirviendo archivo empaquetado: {e}")
         return jsonify({
             "error": "Error interno del servidor",
             "message": str(e)
         }), 500
+
+@app.route('/fast/<user_id>/downloads/<filename>')
+def fast_download(user_id, filename):
+    """Endpoint optimizado para descargas ultra rápidas"""
+    try:
+        user_download_dir = os.path.join(BASE_DIR, user_id, "downloads")
+        file_path = os.path.join(user_download_dir, filename)
+        
+        if not os.path.exists(file_path):
+            return jsonify({"error": "Archivo no encontrado"}), 404
+        
+        original_filename = file_service.get_original_filename(user_id, filename, "downloads")
+        
+        # Usar send_file optimizado con buffering grande
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=original_filename,
+            mimetype='application/octet-stream',
+            conditional=False,  # Sin conditional requests para más velocidad
+            etag=False,
+            cache_timeout=0,
+            max_age=0,
+            last_modified=None,
+            chunk_size=CHUNK_SIZE,
+            buffer_size=SENDFILE_BUFFER_SIZE
+        )
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.errorhandler(404)
 def not_found(error):
@@ -662,8 +764,9 @@ def not_found(error):
             "/health", 
             "/system-status",
             "/files",
-            "/storage/<user_id>/downloads/<filename>",  # ⬅️ CAMBIADO: static → storage
-            "/storage/<user_id>/packed/<filename>"  # ⬅️ CAMBIADO: static → storage
+            "/storage/<user_id>/downloads/<filename>",
+            "/storage/<user_id>/packed/<filename>",
+            "/fast/<user_id>/downloads/<filename>"
         ]
     }), 404
 
@@ -678,4 +781,4 @@ def internal_error(error):
 
 if __name__ == '__main__':
     # Solo para desarrollo local
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    app.run(host='0.0.0.0', port=8080, debug=False, threaded=True)
