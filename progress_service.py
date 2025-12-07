@@ -34,6 +34,22 @@ class ProgressService:
             minutes = int((eta_seconds % 3600) // 60)
             return f"{hours}h {minutes}m"
 
+    def format_speed(self, speed_bytes):
+        """Formatea la velocidad de descarga de forma legible"""
+        if speed_bytes <= 0:
+            return "0.0 B/s"
+        
+        speed_kb = speed_bytes / 1024
+        if speed_kb < 1024:
+            return f"{speed_kb:.1f} KB/s"
+        
+        speed_mb = speed_kb / 1024
+        if speed_mb < 1024:
+            return f"{speed_mb:.1f} MB/s"
+        
+        speed_gb = speed_mb / 1024
+        return f"{speed_gb:.2f} GB/s"
+
     def create_progress_message(self, filename, current, total, speed=0, user_first_name=None, process_type="Subiendo", current_file=1, total_files=1):
         """Crea el mensaje de progreso con ETA, nombre y posición en cola CORREGIDO"""
         if len(filename) > 25:
@@ -44,7 +60,7 @@ class ProgressService:
         progress_bar = self.create_progress_bar(current, total)
         processed = file_service.format_bytes(current)
         total_size = file_service.format_bytes(total)
-        speed_str = file_service.format_bytes(speed) + "/s" if speed > 0 else "0.0 B/s"
+        speed_str = self.format_speed(speed)
         
         # Calcular ETA
         eta = self.calculate_eta(current, total, speed)
@@ -54,7 +70,7 @@ class ProgressService:
         message += f"**📊 Progreso:** {processed} / {total_size}\n"
         message += f"**⚡ Velocidad:** {speed_str}\n"
         message += f"**🕐 ETA:** {eta}\n"
-        message += f"**📋 En cola:** {current_file}/{total_files}\n"  # Posición en cola
+        message += f"**📋 En cola:** {current_file}/{total_files}\n"
         if user_first_name:
             message += f"**👤 Usuario:** {user_first_name}"
 
