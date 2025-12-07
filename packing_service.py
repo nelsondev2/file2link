@@ -22,6 +22,7 @@ class SimplePackingService:
                 return None, message
             
             try:
+                # CORREGIDO: usar "downloads" en lugar de "download"
                 user_dir = file_service.get_user_directory(user_id, "downloads")
                 if not os.path.exists(user_dir):
                     return None, "No tienes archivos para empaquetar"
@@ -30,6 +31,7 @@ class SimplePackingService:
                 if not files:
                     return None, "No tienes archivos para empaquetar"
                 
+                # CORREGIDO: usar "packed" 
                 packed_dir = file_service.get_user_directory(user_id, "packed")
                 os.makedirs(packed_dir, exist_ok=True)
                 
@@ -71,7 +73,7 @@ class SimplePackingService:
             
             logger.info(f"Empaquetando {total_files} archivos en {output_file}")
             
-            # Crear ZIP con todos los archivos usando chunks grandes
+            # Crear ZIP con todos los archivos
             with zipfile.ZipFile(output_file, 'w', compression=zipfile.ZIP_STORED) as zipf:
                 for filename, file_path in all_files:
                     try:
@@ -94,8 +96,7 @@ class SimplePackingService:
                 'filename': f"{base_filename}.zip",
                 'url': download_url,
                 'size_mb': size_mb,
-                'total_files': total_files,
-                'download_speed_optimized': True
+                'total_files': total_files
             }], f"Empaquetado completado: {total_files} archivos, {size_mb:.1f}MB"
             
         except Exception as e:
@@ -136,7 +137,7 @@ class SimplePackingService:
                         logger.error(f"Error agregando {filename} al ZIP temporal: {e}")
                         continue
             
-            # Dividir el archivo empaquetado usando chunks grandes
+            # Dividir el archivo empaquetado
             part_files = []
             part_num = 1
             
@@ -164,8 +165,7 @@ class SimplePackingService:
                         'number': file_num,
                         'filename': part_filename,
                         'url': download_url,
-                        'size_mb': part_size / (1024 * 1024),
-                        'download_speed_optimized': True
+                        'size_mb': part_size / (1024 * 1024)
                     })
                     
                     logger.info(f"Creada parte {part_num}: {part_filename} ({part_size/(1024*1024):.1f}MB)")
