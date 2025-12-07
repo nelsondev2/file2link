@@ -1,7 +1,6 @@
+aiofiles
+Flask
 pyrogram
-tgcrypto
-python-dotenv
-flask
+TgCrypto
 waitress
-py7zr
-yt-dlp
+psutil
