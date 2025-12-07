@@ -1,7 +1,7 @@
 #!/bin/bash
 set -o errexit
 
-echo "🚀 Iniciando Bot de File2Link..."
+echo "🚀 Iniciando Bot de File2Link - Versión Optimizada..."
 
 # ===========================================
 # FASE 1: VERIFICACIÓN DE VARIABLES DE ENTORNO
@@ -29,13 +29,22 @@ if [ -z "$API_HASH" ]; then
 fi
 
 echo "✅ Todas las variables de entorno configuradas"
+echo "⚡ Configuración optimizada para descargas de alta velocidad"
 
 # ===========================================
 # FASE 2: INICIO DE LA APLICACIÓN
 # ===========================================
 
-echo "🎯 Iniciando bot..."
+echo "🎯 Iniciando servicios optimizados..."
 echo "==========================================="
 
-# Ejecutar el bot
+# Mostrar configuración de velocidad
+echo "📊 Configuración de Velocidad:"
+echo "   • Chunk size: 2MB"
+echo "   • Buffer size: 4MB"
+echo "   • Threads: 100"
+echo "   • Connection limit: 1000"
+echo "==========================================="
+
+# Ejecutar el bot optimizado
 exec python main.py
