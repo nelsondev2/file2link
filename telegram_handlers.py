@@ -11,16 +11,17 @@ from load_manager import load_manager
 from file_service import file_service
 from progress_service import progress_service
 from packing_service import packing_service
+from download_service import fast_download_service
 from config import MAX_FILE_SIZE, MAX_FILE_SIZE_MB
 
 logger = logging.getLogger(__name__)
 
 # ===== SISTEMA DE SESIÓN POR USUARIO =====
-user_sessions = {}  # {user_id: {'current_folder': 'downloads'}}
-user_queues = {}    # {user_id: [message1, message2, ...]}
-user_progress_msgs = {}  # {user_id: {message_id: progress_message}}
-user_current_processing = {}  # {user_id: current_message_id}
-user_batch_totals = {}  # ⬅️ NUEVO: Para llevar el control del total por lote
+user_sessions = {}
+user_queues = {}
+user_progress_msgs = {}
+user_current_processing = {}
+user_batch_totals = {}
 
 def get_user_session(user_id):
     """Obtiene o crea la sesión del usuario"""
@@ -125,7 +126,6 @@ async def cd_command(client, message):
         args = message.text.split()
         
         if len(args) == 1:
-            # Mostrar carpeta actual
             current = session['current_folder']
             await message.reply_text(f"📂 **Carpeta actual:** `{current}`")
         else:
@@ -153,7 +153,6 @@ async def list_command(client, message):
         session = get_user_session(user_id)
         current_folder = session['current_folder']
         
-        # Obtener argumentos para paginación
         args = message.text.split()
         page = 1
         if len(args) > 1:
@@ -173,7 +172,6 @@ async def list_command(client, message):
             )
             return
         
-        # Configurar paginación
         items_per_page = 10
         total_pages = (len(files) + items_per_page - 1) // items_per_page
         page = max(1, min(page, total_pages))
@@ -191,7 +189,6 @@ async def list_command(client, message):
             files_text += f"📏 **Tamaño:** {file_info['size_mb']:.1f} MB\n"
             files_text += f"🔗 **Enlace:** [Descargar]({file_info['url']})\n\n"
 
-        # Información de paginación
         if total_pages > 1:
             files_text += f"**Navegación:**\n"
             if page > 1:
@@ -205,9 +202,7 @@ async def list_command(client, message):
         files_text += f"• `/rename <número> <nuevo_nombre>` - Renombrar\n"
         files_text += f"• `/clear` - Vaciar carpeta completa"
 
-        # Verificar longitud del mensaje
         if len(files_text) > 4000:
-            # Si es muy largo, dividir en partes
             parts = []
             current_part = ""
             
@@ -221,10 +216,8 @@ async def list_command(client, message):
             if current_part:
                 parts.append(current_part)
             
-            # Enviar primera parte
             await message.reply_text(parts[0], disable_web_page_preview=True)
             
-            # Enviar partes restantes
             for part in parts[1:]:
                 await message.reply_text(part, disable_web_page_preview=True)
         else:
@@ -257,7 +250,6 @@ async def delete_command(client, message):
             await message.reply_text("❌ El número debe ser un valor numérico válido.")
             return
         
-        # Eliminar archivo inmediatamente (sin confirmación)
         success, result_message = file_service.delete_file_by_number(user_id, file_number, current_folder)
         
         if success:
@@ -276,7 +268,6 @@ async def clear_command(client, message):
         session = get_user_session(user_id)
         current_folder = session['current_folder']
         
-        # Vaciar carpeta inmediatamente (sin confirmación)
         success, result_message = file_service.delete_all_files(user_id, current_folder)
         
         if success:
@@ -335,15 +326,12 @@ async def rename_command(client, message):
         logger.error(f"Error en comando /rename: {e}")
         await message.reply_text("❌ Error al renombrar archivo.")
 
-# ===== COMANDOS GLOBALES =====
-
 async def status_command(client, message):
     """Maneja el comando /status - Estado del sistema"""
     try:
         user_id = message.from_user.id
         session = get_user_session(user_id)
         
-        # Archivos por carpeta
         downloads_count = len(file_service.list_user_files(user_id, "downloads"))
         packed_count = len(file_service.list_user_files(user_id, "packed"))
         total_size = file_service.get_user_storage_usage(user_id)
@@ -486,8 +474,6 @@ async def pack_command(client, message):
         logger.error(f"Error en comando /pack: {e}")
         await message.reply_text("❌ Error en el proceso de empaquetado.")
 
-# ===== GESTIÓN DE COLA =====
-
 async def queue_command(client, message):
     """Maneja el comando /queue - Ver estado de la cola de descargas"""
     try:
@@ -535,11 +521,9 @@ async def clear_queue_command(client, message):
         queue_size = len(user_queues[user_id])
         user_queues[user_id] = []
         
-        # Limpiar también el procesamiento actual
         if user_id in user_current_processing:
             del user_current_processing[user_id]
         
-        # Limpiar también los totales de lote
         if user_id in user_batch_totals:
             del user_batch_totals[user_id]
         
@@ -549,14 +533,11 @@ async def clear_queue_command(client, message):
         logger.error(f"Error en /clearqueue: {e}")
         await message.reply_text("❌ Error al limpiar la cola.")
 
-# ===== COMANDO CLEANUP =====
-
 async def cleanup_command(client, message):
     """Limpia archivos temporales y optimiza el sistema"""
     try:
         status_msg = await message.reply_text("🧹 **Limpiando archivos temporales...**")
         
-        # Obtener estadísticas de espacio
         total_size = file_service.get_user_storage_usage(message.from_user.id)
         size_mb = total_size / (1024 * 1024)
         
@@ -570,8 +551,6 @@ async def cleanup_command(client, message):
         logger.error(f"Error en comando cleanup: {e}")
         await message.reply_text("❌ Error durante la limpieza.")
 
-# ===== MANEJO DE ARCHIVOS CON COLA MEJORADO =====
-
 async def handle_file(client, message):
     """Maneja la recepción de archivos con sistema de cola MEJORADO"""
     try:
@@ -580,7 +559,6 @@ async def handle_file(client, message):
 
         logger.info(f"📥 Archivo recibido de {user_id} - Agregando a cola")
 
-        # Validar tamaño máximo del archivo desde config.py
         file_size = 0
         if message.document:
             file_size = message.document.file_size or 0
@@ -591,7 +569,6 @@ async def handle_file(client, message):
         elif message.photo:
             file_size = message.photo[-1].file_size or 0
 
-        # Verificar límite de tamaño configurable
         if file_size > MAX_FILE_SIZE:
             await message.reply_text(
                 "❌ **Archivo demasiado grande**\n\n"
@@ -601,15 +578,11 @@ async def handle_file(client, message):
             )
             return
 
-        # Inicializar cola del usuario si no existe
         if user_id not in user_queues:
             user_queues[user_id] = []
         
-        # Agregar mensaje a la cola
         user_queues[user_id].append(message)
         
-        # ⬅️ CORREGIDO: Solo iniciar procesamiento si es el primer archivo
-        # No reiniciar el procesamiento si ya hay un lote en curso
         if len(user_queues[user_id]) == 1:
             await process_file_queue(client, user_id)
         
@@ -623,7 +596,6 @@ async def handle_file(client, message):
 async def process_file_queue(client, user_id):
     """Procesa la cola de archivos del usuario de manera secuencial - VERSIÓN CORREGIDA"""
     try:
-        # ⬅️ CORREGIDO: Guardar el total del lote actual
         total_files_in_batch = len(user_queues[user_id])
         user_batch_totals[user_id] = total_files_in_batch
         
@@ -637,28 +609,24 @@ async def process_file_queue(client, user_id):
             
             await process_single_file(client, message, user_id, current_position, total_files_in_batch)
             
-            # Pequeña pausa entre archivos para evitar sobrecarga
             await asyncio.sleep(1)
         
-        # ⬅️ CORREGIDO: Limpiar el total del lote cuando se complete
         if user_id in user_batch_totals:
             del user_batch_totals[user_id]
                 
     except Exception as e:
         logger.error(f"Error en process_file_queue: {e}", exc_info=True)
-        # Limpiar cola en caso de error
         if user_id in user_queues:
             user_queues[user_id] = []
         if user_id in user_batch_totals:
             del user_batch_totals[user_id]
 
 async def process_single_file(client, message, user_id, current_position, total_files):
-    """Procesa un solo archivo con progreso MEJORADO (con posición en cola CORREGIDA)"""
-    max_retries = 2
+    """Procesa un solo archivo con progreso MEJORADO y descarga rápida"""
+    max_retries = 3
     start_time = time.time()
     
     try:
-        # Obtener información del archivo
         file_obj = None
         file_type = None
         original_filename = None
@@ -680,13 +648,12 @@ async def process_single_file(client, message, user_id, current_position, total_
             original_filename = message.audio.file_name or "audio_sin_nombre.mp3"
             file_size = file_obj.file_size or 0
         elif message.photo:
-            file_obj = message.photo[-1]  # Foto de mayor calidad
+            file_obj = message.photo[-1]
             file_type = "foto"
             original_filename = f"foto_{message.id}.jpg"
             file_size = file_obj.file_size or 0
         else:
             logger.warning(f"Mensaje no contiene archivo manejable: {message.media}")
-            # Eliminar de la cola si no es un archivo válido
             if user_id in user_queues and user_queues[user_id]:
                 user_queues[user_id].pop(0)
             return
@@ -698,13 +665,10 @@ async def process_single_file(client, message, user_id, current_position, total_
             await message.reply_text("❌ Error: No se pudo identificar el archivo.")
             return
 
-        # Crear directorio de usuario
         user_dir = file_service.get_user_directory(user_id, "downloads")
         
-        # Sanitizar y generar nombre único
         sanitized_name = file_service.sanitize_filename(original_filename)
         
-        # Generar nombre único para evitar colisiones
         stored_filename = sanitized_name
         counter = 1
         base_name, ext = os.path.splitext(sanitized_name)
@@ -715,11 +679,9 @@ async def process_single_file(client, message, user_id, current_position, total_
             file_path = os.path.join(user_dir, stored_filename)
             counter += 1
 
-        # Registrar archivo ANTES de descargar
         file_number = file_service.register_file(user_id, original_filename, stored_filename, "downloads")
         logger.info(f"📝 Archivo registrado: #{file_number} - {original_filename} -> {stored_filename}")
 
-        # Crear mensaje de progreso INDIVIDUAL para este archivo
         initial_message = progress_service.create_progress_message(
             filename=original_filename,
             current=0,
@@ -727,36 +689,39 @@ async def process_single_file(client, message, user_id, current_position, total_
             speed=0,
             user_first_name=message.from_user.first_name,
             process_type="Subiendo",
-            current_file=current_position,  # ⬅️ CORREGIDO: posición actual en el lote
-            total_files=total_files         # ⬅️ CORREGIDO: total del lote
+            current_file=current_position,
+            total_files=total_files
         )
         
         progress_msg = await message.reply_text(initial_message)
         
-        # Guardar el mensaje de progreso actual para este usuario
         user_current_processing[user_id] = progress_msg.id
 
-        progress_data = {'last_update': 0}
+        progress_data = {'last_update': 0, 'last_speed': 0}
 
         async def progress_callback(current, total):
             try:
                 elapsed_time = time.time() - start_time
                 speed = current / elapsed_time if elapsed_time > 0 else 0
+                
+                progress_data['last_speed'] = (
+                    0.7 * progress_data.get('last_speed', 0) + 0.3 * speed
+                )
+                smoothed_speed = progress_data['last_speed']
 
                 current_time = time.time()
                 last_update = progress_data.get('last_update', 0)
 
-                if current_time - last_update >= 2 or current == total:
-                    # ⬅️ CORREGIDO: Usar posición fija durante todo el proceso
+                if current_time - last_update >= 0.5 or current == total:
                     progress_message = progress_service.create_progress_message(
                         filename=original_filename,
                         current=current,
                         total=total,
-                        speed=speed,
+                        speed=smoothed_speed,
                         user_first_name=message.from_user.first_name,
                         process_type="Subiendo",
-                        current_file=current_position,  # ⬅️ CORREGIDO: posición fija
-                        total_files=total_files         # ⬅️ CORREGIDO: total fijo
+                        current_file=current_position,
+                        total_files=total_files
                     )
 
                     try:
@@ -768,39 +733,32 @@ async def process_single_file(client, message, user_id, current_position, total_
             except Exception as e:
                 logger.error(f"Error en progress callback: {e}")
 
-        # Descargar archivo
         try:
-            logger.info(f"⬇️ Iniciando descarga: {original_filename}")
-            downloaded_path = await message.download(
-                file_path,
-                progress=progress_callback
+            logger.info(f"⚡ Iniciando descarga rápida: {original_filename}")
+            
+            success, downloaded = await fast_download_service.download_with_retry(
+                client=client,
+                message=message,
+                file_path=file_path,
+                progress_callback=progress_callback
             )
 
-            if not downloaded_path or not os.path.exists(file_path):
-                if retry_count < max_retries:
-                    logger.warning(f"Reintentando descarga (intento {retry_count + 1})")
-                    await asyncio.sleep(2)
-                    await process_single_file(client, message, user_id, current_position, total_files)
-                    return
-                else:
-                    await progress_msg.edit_text("❌ Error: El archivo no se descargó correctamente después de varios intentos.")
-                    # Revertir registro si falla la descarga
-                    if user_id in user_queues and user_queues[user_id]:
-                        user_queues[user_id].pop(0)
-                    return
+            if not success or not os.path.exists(file_path):
+                await progress_msg.edit_text("❌ Error: El archivo no se descargó correctamente.")
+                if user_id in user_queues and user_queues[user_id]:
+                    user_queues[user_id].pop(0)
+                return
 
-            # Verificar que el archivo se descargó completamente
             final_size = os.path.getsize(file_path)
-            if file_size > 0 and final_size < file_size * 0.9:  # Permitir 10% de diferencia
-                logger.warning(f"⚠️ Tamaño del archivo sospechoso: esperado {file_size}, obtenido {final_size}")
-
+            if file_size > 0 and final_size < file_size * 0.95:
+                logger.warning(f"⚠️ Posible descarga incompleta: esperado {file_size}, obtenido {final_size}")
+                await progress_msg.edit_text("⚠️ Advertencia: El archivo podría estar incompleto.")
+            
             size_mb = final_size / (1024 * 1024)
 
-            # Generar URL de descarga
             download_url = file_service.create_download_url(user_id, stored_filename)
             logger.info(f"🔗 URL generada: {download_url}")
 
-            # Obtener número real del archivo
             files_list = file_service.list_user_files(user_id, "downloads")
             current_file_number = None
             for file_info in files_list:
@@ -808,7 +766,6 @@ async def process_single_file(client, message, user_id, current_position, total_
                     current_file_number = file_info['number']
                     break
 
-            # Mensaje final de éxito
             queue_info = ""
             next_files_count = len(user_queues[user_id]) - 1 if user_id in user_queues and user_queues[user_id] else 0
             
@@ -826,72 +783,52 @@ async def process_single_file(client, message, user_id, current_position, total_
 
 **Ubicación:** Carpeta `downloads`{queue_info}"""
 
-            # Mostrar mensaje final
             await progress_msg.edit_text(success_text, disable_web_page_preview=True)
             
             logger.info(f"✅ Archivo guardado exitosamente: {stored_filename} para usuario {user_id}")
 
         except Exception as download_error:
             logger.error(f"❌ Error en descarga: {download_error}", exc_info=True)
-            if retry_count < max_retries:
-                logger.info(f"Reintentando descarga (intento {retry_count + 1})")
-                await asyncio.sleep(2)
-                await process_single_file(client, message, user_id, current_position, total_files)
-                return
-            else:
-                await progress_msg.edit_text(f"❌ Error al descargar el archivo después de {max_retries + 1} intentos: {str(download_error)}")
+            await progress_msg.edit_text(f"❌ Error al descargar el archivo: {str(download_error)}")
         
-        # FINALMENTE: Remover este mensaje de la cola
         if user_id in user_queues and user_queues[user_id]:
             user_queues[user_id].pop(0)
             
-        # Limpiar mensaje de progreso actual
         if user_id in user_current_processing:
             del user_current_processing[user_id]
 
     except Exception as e:
         logger.error(f"❌ Error procesando archivo individual: {e}", exc_info=True)
         try:
-            # Intentar notificar al usuario del error
-            error_msg = await message.reply_text(f"❌ Error procesando archivo: {str(e)}")
+            await message.reply_text(f"❌ Error procesando archivo: {str(e)}")
         except:
             pass
         
-        # Asegurarse de remover de la cola incluso en error
         if user_id in user_queues and user_queues[user_id]:
             user_queues[user_id].pop(0)
             
-        # Limpiar mensaje de procesamiento actual
         if user_id in user_current_processing:
             del user_current_processing[user_id]
 
-# ===== CONFIGURACIÓN DE HANDLERS =====
-
 def setup_handlers(client):
     """Configura todos los handlers del bot"""
-    # Comandos básicos
     client.on_message(filters.command("start") & filters.private)(start_command)
     client.on_message(filters.command("help") & filters.private)(help_command)
     client.on_message(filters.command("status") & filters.private)(status_command)
     
-    # Sistema de carpetas
     client.on_message(filters.command("cd") & filters.private)(cd_command)
     client.on_message(filters.command("list") & filters.private)(list_command)
     client.on_message(filters.command("delete") & filters.private)(delete_command)
     client.on_message(filters.command("clear") & filters.private)(clear_command)
     client.on_message(filters.command("rename") & filters.private)(rename_command)
     
-    # Empaquetado
     client.on_message(filters.command("pack") & filters.private)(pack_command)
     
-    # Gestión de cola
     client.on_message(filters.command("queue") & filters.private)(queue_command)
     client.on_message(filters.command("clearqueue") & filters.private)(clear_queue_command)
     
-    # Limpieza
     client.on_message(filters.command("cleanup") & filters.private)(cleanup_command)
     
-    # Archivos (sin botones)
     client.on_message(
         (filters.document | filters.video | filters.audio | filters.photo) &
         filters.private
