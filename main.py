@@ -30,8 +30,7 @@ def start_web_server():
     serve(app, host='0.0.0.0', port=PORT)
 
 if __name__ == '__main__':
-    # Crear directorios necesarios
-    os.makedirs(BASE_DIR, exist_ok=True)  # ⬅️ BASE_DIR ahora es "storage"
+    os.makedirs(BASE_DIR, exist_ok=True)
     
     logger.info(f"Directorios creados/verificados: {BASE_DIR}")
 
