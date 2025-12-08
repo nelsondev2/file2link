@@ -12,7 +12,7 @@ from file_service import file_service
 from progress_service import progress_service
 from packing_service import packing_service
 from download_service import fast_download_service
-from config import MAX_FILE_SIZE, MAX_FILE_SIZE_MB
+from config import MAX_FILE_SIZE, MAX_FILE_SIZE_MB, MAX_PART_SIZE_MB
 
 logger = logging.getLogger(__name__)
 
@@ -386,8 +386,8 @@ async def pack_command(client, message):
                 if split_size <= 0:
                     await message.reply_text("❌ El tamaño de división debe ser mayor a 0 MB")
                     return
-                if split_size > 200:
-                    await message.reply_text("❌ El tamaño máximo por parte es 200 MB")
+                if split_size > MAX_PART_SIZE_MB:
+                    await message.reply_text(f"❌ El tamaño máximo por parte es {MAX_PART_SIZE_MB} MB ({MAX_PART_SIZE_MB//1024} GB)")
                     return
             except ValueError:
                 await message.reply_text("❌ Formato incorrecto. Usa: `/pack` o `/pack 100`")
