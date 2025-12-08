@@ -1,22 +1,31 @@
 #!/bin/bash
 set -o errexit
 
-echo "🚀 Iniciando Bot de File2Link - Versión Optimizada..."
+echo "🚀 Iniciando Bot de File2Link - Versión OPTIMIZADA para Render.com..."
 
 # ===========================================
-# FASE 1: OPTIMIZACIONES DEL SISTEMA
+# FASE 1: OPTIMIZACIONES DEL SISTEMA PARA BAJOS RECURSOS
 # ===========================================
 
-echo "⚡ Aplicando optimizaciones de rendimiento..."
+echo "⚡ Aplicando optimizaciones para plan gratuito (0.1 CPU)..."
+
+# Optimizar para usar menos memoria
+export PYTHONMALLOC=malloc
+export PYTHONUNBUFFERED=1
+
+# Configurar Python para usar menos memoria
+export PYTHONOPTIMIZE=1
 
 # Aumentar límites del sistema para descargas grandes
 ulimit -n 65536 2>/dev/null || true
 echo "  ✓ Límites de archivos aumentados"
 
-# Configurar buffer TCP para mejor rendimiento de red
-sysctl -w net.core.rmem_max=16777216 2>/dev/null || true
-sysctl -w net.core.wmem_max=16777216 2>/dev/null || true
-echo "  ✓ Buffers TCP optimizados"
+# Configurar buffer TCP más pequeño para usar menos memoria
+sysctl -w net.core.rmem_max=8388608 2>/dev/null || true
+sysctl -w net.core.wmem_max=8388608 2>/dev/null || true
+sysctl -w net.core.rmem_default=65536 2>/dev/null || true
+sysctl -w net.core.wmem_default=65536 2>/dev/null || true
+echo "  ✓ Buffers TCP optimizados para baja memoria"
 
 # ===========================================
 # FASE 2: VERIFICACIÓN DE VARIABLES DE ENTORNO
@@ -45,15 +54,28 @@ fi
 echo "✅ Todas las variables de entorno configuradas"
 
 # ===========================================
-# FASE 3: INICIO DE LA APLICACIÓN
+# FASE 3: CONFIGURACIÓN DE LÍMITES
 # ===========================================
 
-echo "🎯 Iniciando bot optimizado..."
-echo "📊 Configuración de descarga:"
-echo "   • Buffer: 128KB"
-echo "   • Timeout: 1 hora"
-echo "   • Reintentos: 3"
+echo "📊 Configuración de límites activa:"
+echo "   • Tamaño máximo por parte: 500 MB"
+echo "   • Total máximo para empaquetar: 1000 MB"
+echo "   • Máximo de archivos: 20"
+echo "   • Buffer descarga: 64KB"
+echo "   • Timeout empaquetado: 5 minutos"
+echo "   • CPU límite: 70%"
 echo "==========================================="
 
-# Ejecutar el bot
-exec python main.py
+# ===========================================
+# FASE 4: INICIO DE LA APLICACIÓN
+# ===========================================
+
+echo "🎯 Iniciando bot optimizado para bajos recursos..."
+echo "💡 Para archivos grandes (>1GB):"
+echo "   1. Usa partes más pequeñas (/pack 200)"
+echo "   2. Divide manualmente antes de subir"
+echo "   3. El servidor tiene solo 0.1 CPU"
+echo "==========================================="
+
+# Ejecutar el bot con garbage collector activo
+exec python -c "import gc; gc.set_threshold(700, 10, 5)" main.py
