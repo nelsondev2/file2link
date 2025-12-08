@@ -36,9 +36,14 @@ async def start_command(client, message):
     try:
         user = message.from_user
         
+        # Obtener límites de empaquetado
+        packing_limits = packing_service.get_packing_limits()
+        
         welcome_text = f"""👋 **Bienvenido/a {user.first_name}!**
 
 🤖 File2Link Bot - Sistema de Gestión de Archivos por Carpetas
+
+**⚠️ IMPORTANTE: Servidor con recursos limitados (0.1 CPU)**
 
 **📁 SISTEMA DE CARPETAS:**
 `/cd downloads` - Acceder a archivos de descarga
@@ -51,9 +56,12 @@ async def start_command(client, message):
 `/delete <número>`
 `/clear` - Vaciar carpeta actual
 
-**📦 EMPAQUETADO:**
+**📦 EMPAQUETADO (LÍMITES):**
 `/pack` - Empaquetar downloads → packed
 `/pack <MB>` - Empaquetar y dividir
+• **Máx. por parte:** {packing_limits['max_part_size_mb']} MB
+• **Máx. total:** {packing_limits['max_total_size_mb']} MB  
+• **Máx. archivos:** {packing_limits['max_files']}
 
 **🔄 GESTIÓN DE COLA:**
 `/queue` - Ver archivos en cola de descarga
@@ -66,6 +74,12 @@ async def start_command(client, message):
 **📏 LÍMITE DE ARCHIVOS:**
 Tamaño máximo: {MAX_FILE_SIZE_MB} MB
 
+**💡 PARA ARCHIVOS GRANDES (>1GB):**
+1. Usa `/pack 200` para partes de 200MB
+2. Divide manualmente antes de subir
+3. Sube archivos más pequeños
+4. El servidor tiene solo 0.1 CPU
+
 **¡Envía archivos o usa /cd para comenzar!**"""
 
         await message.reply_text(welcome_text)
@@ -77,7 +91,12 @@ Tamaño máximo: {MAX_FILE_SIZE_MB} MB
 async def help_command(client, message):
     """Maneja el comando /help"""
     try:
-        help_text = f"""📚 **Ayuda - Sistema de Carpetas**
+        # Obtener límites de empaquetado
+        packing_limits = packing_service.get_packing_limits()
+        
+        help_text = f"""📚 **Ayuda - Sistema de Carpetas (OPTIMIZADO)**
+
+**⚠️ IMPORTANTE: Servidor con recursos limitados (0.1 CPU)**
 
 **📁 NAVEGACIÓN:**
 `/cd downloads` - Archivos de descarga
@@ -90,9 +109,12 @@ async def help_command(client, message):
 `/delete N` - Eliminar archivo
 `/clear` - Vaciar carpeta
 
-**📦 EMPAQUETADO:**
+**📦 EMPAQUETADO (LÍMITES):**
 `/pack` - Crear ZIP de downloads
 `/pack MB` - Dividir en partes
+• **Máx. por parte:** {packing_limits['max_part_size_mb']} MB
+• **Máx. total:** {packing_limits['max_total_size_mb']} MB  
+• **Máx. archivos:** {packing_limits['max_files']}
 
 **🔄 GESTIÓN DE COLA:**
 `/queue` - Ver archivos en cola de descarga
@@ -105,12 +127,20 @@ async def help_command(client, message):
 **📏 LÍMITE DE ARCHIVOS:**
 Tamaño máximo: {MAX_FILE_SIZE_MB} MB
 
-**📌 EJEMPLOS:**
+**💡 PARA ARCHIVOS GRANDES (>1GB):**
+1. Usa `/pack 200` para partes de 200MB
+2. Divide manualmente antes de subir
+3. Sube archivos más pequeños
+4. Usa `/queue` para ver el progreso
+
+**📌 EJEMPLOS SEGUROS:**
+`/pack 200` - Partes de 200MB (recomendado)
+`/pack 100` - Partes de 100MB (más seguro)
+`/pack` - Un solo ZIP (para pocos archivos)
 `/cd downloads`
 `/list`
 `/delete 5`
 `/rename 3 mi_documento`
-`/pack 100`
 `/queue` - Ver qué archivos están en cola"""
 
         await message.reply_text(help_text)
@@ -339,6 +369,9 @@ async def status_command(client, message):
         
         system_status = load_manager.get_status()
         
+        # Obtener límites de empaquetado
+        packing_limits = packing_service.get_packing_limits()
+        
         status_text = f"""**📊 ESTADO DEL SISTEMA - {message.from_user.first_name}**
 
 **👤 USUARIO:**
@@ -348,15 +381,23 @@ async def status_command(client, message):
 • **Archivos packed:** {packed_count}
 • **Espacio usado:** {size_mb:.2f} MB
 
-**📏 CONFIGURACIÓN:**
+**📏 LÍMITES DE EMPAQUETADO:**
+• **Máx. por parte:** {packing_limits['max_part_size_mb']} MB
+• **Máx. total:** {packing_limits['max_total_size_mb']} MB
+• **Máx. archivos:** {packing_limits['max_files']}
 • **Límite por archivo:** {MAX_FILE_SIZE_MB} MB
 
-**🖥️ SERVIDOR:**
+**🖥️ SERVIDOR (0.1 CPU):**
 • **Procesos activos:** {system_status['active_processes']}/{system_status['max_processes']}
 • **Uso de CPU:** {system_status['cpu_percent']:.1f}%
 • **Uso de memoria:** {system_status['memory_percent']:.1f}%
-• **Estado:** {"✅ ACEPTANDO TRABAJO" if system_status['can_accept_work'] else "⚠️ SOBRECARGADO"}"""
-        
+• **Estado:** {"✅ ACEPTANDO TRABAJO" if system_status['can_accept_work'] else "⚠️ SOBRECARGADO"}
+
+**💡 RECOMENDACIONES:**
+• Para archivos grandes (>1GB): usa `/pack 200`
+• Divide manualmente archivos muy grandes
+• El servidor tiene recursos limitados"""
+
         await message.reply_text(status_text)
         
     except Exception as e:
@@ -364,10 +405,13 @@ async def status_command(client, message):
         await message.reply_text("❌ Error al obtener estado.")
 
 async def pack_command(client, message):
-    """Maneja el comando /pack - Empaquetado"""
+    """Maneja el comando /pack - Empaquetado CON LÍMITES"""
     try:
         user_id = message.from_user.id
         command_parts = message.text.split()
+        
+        # Obtener límites de empaquetado
+        packing_limits = packing_service.get_packing_limits()
         
         system_status = load_manager.get_status()
         if not system_status['can_accept_work']:
@@ -386,29 +430,60 @@ async def pack_command(client, message):
                 if split_size <= 0:
                     await message.reply_text("❌ El tamaño de división debe ser mayor a 0 MB")
                     return
-                if split_size > MAX_PART_SIZE_MB:
-                    await message.reply_text(f"❌ El tamaño máximo por parte es {MAX_PART_SIZE_MB} MB ({MAX_PART_SIZE_MB//1024} GB)")
+                if split_size > packing_limits['max_part_size_mb']:
+                    await message.reply_text(
+                        f"❌ **Límite excedido**\n\n"
+                        f"**Tamaño solicitado:** {split_size} MB\n"
+                        f"**Máximo permitido:** {packing_limits['max_part_size_mb']} MB\n\n"
+                        f"Para archivos grandes (>1GB) se recomienda:\n"
+                        f"1. Usar partes más pequeñas (ej: `/pack 200`)\n"
+                        f"2. Dividir manualmente los archivos antes\n"
+                        f"3. Usar `/pack` sin división para un solo ZIP"
+                    )
                     return
             except ValueError:
                 await message.reply_text("❌ Formato incorrecto. Usa: `/pack` o `/pack 100`")
                 return
         
-        status_msg = await message.reply_text(
-            "📦 **Iniciando empaquetado...**\n\n"
-            "Uniendo todos tus archivos en un ZIP..."
-        )
+        # Mostrar advertencia para archivos grandes
+        status_msg_text = "📦 **Iniciando empaquetado...**\n\n"
         
-        def run_simple_packing():
+        if split_size:
+            status_msg_text += f"**Configuración:**\n"
+            status_msg_text += f"• Tamaño por parte: {split_size} MB\n"
+            status_msg_text += f"• Máximo permitido: {packing_limits['max_part_size_mb']} MB\n"
+            status_msg_text += f"• Límite total: {packing_limits['max_total_size_mb']} MB\n"
+            status_msg_text += f"• Máximo de archivos: {packing_limits['max_files']}\n\n"
+        
+        status_msg_text += "⏳ **ADVERTENCIA:** Esto puede tardar varios minutos para archivos grandes..."
+        status_msg_text += "\n\n**Servidor con recursos limitados (0.1 CPU)**"
+        
+        status_msg = await message.reply_text(status_msg_text)
+        
+        def run_optimized_packing():
             try:
                 files, status_message = packing_service.pack_folder(user_id, split_size)
                 return files, status_message
             except Exception as e:
-                logger.error(f"Error en empaquetado: {e}")
+                logger.error(f"Error en empaquetado: {e}", exc_info=True)
                 return None, f"Error al empaquetar: {str(e)}"
         
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(run_simple_packing)
-            files, status_message = future.result(timeout=300)
+        try:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_optimized_packing)
+                files, status_message = future.result(timeout=300)  # 5 minutos máximo
+        
+        except concurrent.futures.TimeoutError:
+            await status_msg.edit_text(
+                "❌ **Tiempo de espera agotado**\n\n"
+                "El empaquetado tardó demasiado tiempo (más de 5 minutos).\n\n"
+                "**Recomendaciones:**\n"
+                "1. Usa partes más pequeñas (ej: `/pack 200`)\n"
+                "2. Divide manualmente los archivos grandes\n"
+                "3. Usa menos archivos en la carpeta `downloads`\n"
+                "4. El servidor tiene recursos limitados (0.1 CPU)"
+            )
+            return
         
         if not files:
             await status_msg.edit_text(f"❌ {status_message}")
@@ -468,11 +543,14 @@ async def pack_command(client, message):
                 
         logger.info(f"Empaquetado completado para usuario {user_id}: {len(files)} archivos")
         
-    except concurrent.futures.TimeoutError:
-        await status_msg.edit_text("❌ El empaquetado tardó demasiado tiempo. Intenta con menos archivos.")
     except Exception as e:
-        logger.error(f"Error en comando /pack: {e}")
-        await message.reply_text("❌ Error en el proceso de empaquetado.")
+        logger.error(f"Error en comando /pack: {e}", exc_info=True)
+        await message.reply_text(
+            "❌ **Error crítico en el proceso de empaquetado**\n\n"
+            "El servidor puede estar sobrecargado.\n"
+            "Intenta con archivos más pequeños o menos archivos.\n\n"
+            "**Recomendación:** Usa `/pack 200` para partes más pequeñas."
+        )
 
 async def queue_command(client, message):
     """Maneja el comando /queue - Ver estado de la cola de descargas"""
@@ -502,6 +580,7 @@ async def queue_command(client, message):
             queue_text += f"**#{i+1}** - {file_info}\n"
         
         queue_text += f"\n**Procesando actualmente:** {current_processing}"
+        queue_text += f"\n\n**💡 Consejo:** Para archivos grandes, espera a que termine cada uno antes de enviar el siguiente."
         
         await message.reply_text(queue_text)
         
@@ -544,7 +623,8 @@ async def cleanup_command(client, message):
         await status_msg.edit_text(
             f"✅ **Limpieza completada**\n\n"
             f"• Espacio usado: {size_mb:.2f} MB\n"
-            f"• Sistema optimizado"
+            f"• Sistema optimizado\n\n"
+            f"**💡 Consejo:** Para mejor rendimiento, mantén menos de 10 archivos en la carpeta `downloads`."
         )
         
     except Exception as e:
@@ -577,6 +657,24 @@ async def handle_file(client, message):
                 "Por favor, divide el archivo en partes más pequeñas."
             )
             return
+
+        # Advertencia para archivos muy grandes
+        if file_size > 500 * 1024 * 1024:  # > 500 MB
+            warning_msg = await message.reply_text(
+                "⚠️ **Archivo muy grande detectado**\n\n"
+                f"**Tamaño:** {file_service.format_bytes(file_size)}\n"
+                "**Procesando...** Esto puede tardar varios minutos.\n"
+                "**Servidor con recursos limitados (0.1 CPU)**"
+            )
+        
+        if file_size > 1000 * 1024 * 1024:  # > 1 GB
+            warning_msg = await message.reply_text(
+                "⚠️ **ARCHIVO MUY GRANDE**\n\n"
+                f"**Tamaño:** {file_service.format_bytes(file_size)}\n"
+                "**ADVERTENCIA:** El procesamiento puede ser lento y puede fallar.\n"
+                "**Recomendación:** Divide archivos >1GB antes de subir.\n"
+                "**Servidor con recursos limitados (0.1 CPU)**"
+            )
 
         if user_id not in user_queues:
             user_queues[user_id] = []
@@ -682,6 +780,7 @@ async def process_single_file(client, message, user_id, current_position, total_
         file_number = file_service.register_file(user_id, original_filename, stored_filename, "downloads")
         logger.info(f"📝 Archivo registrado: #{file_number} - {original_filename} -> {stored_filename}")
 
+        # Mensaje inicial con advertencia para archivos grandes
         initial_message = progress_service.create_progress_message(
             filename=original_filename,
             current=0,
@@ -692,6 +791,13 @@ async def process_single_file(client, message, user_id, current_position, total_
             current_file=current_position,
             total_files=total_files
         )
+        
+        # Añadir advertencia para archivos grandes
+        if file_size > 500 * 1024 * 1024:  # > 500 MB
+            initial_message += "\n\n⚠️ **Archivo grande:** Puede tardar varios minutos..."
+        
+        if file_size > 1000 * 1024 * 1024:  # > 1 GB
+            initial_message += "\n⚠️ **ARCHIVO MUY GRANDE:** El servidor puede sobrecargarse..."
         
         progress_msg = await message.reply_text(initial_message)
         
@@ -734,7 +840,7 @@ async def process_single_file(client, message, user_id, current_position, total_
                 logger.error(f"Error en progress callback: {e}")
 
         try:
-            logger.info(f"⚡ Iniciando descarga rápida: {original_filename}")
+            logger.info(f"⚡ Iniciando descarga optimizada: {original_filename} ({file_size/(1024*1024):.1f} MB)")
             
             success, downloaded = await fast_download_service.download_with_retry(
                 client=client,
@@ -771,6 +877,11 @@ async def process_single_file(client, message, user_id, current_position, total_
             
             if next_files_count > 0:
                 queue_info = f"\n\n⏭️ **Siguiente archivo en cola...** ({next_files_count} restantes)"
+            
+            # Consejo para archivos grandes
+            tip_for_large_files = ""
+            if size_mb > 500:
+                tip_for_large_files = "\n\n**💡 Para empaquetar archivos grandes:**\nRecomendado usar `/pack 200` para partes más pequeñas."
 
             success_text = f"""✅ **Archivo #{current_file_number or file_number} Almacenado!**
 
@@ -781,7 +892,7 @@ async def process_single_file(client, message, user_id, current_position, total_
 **Enlace de Descarga:**
 🔗 [{original_filename}]({download_url})
 
-**Ubicación:** Carpeta `downloads`{queue_info}"""
+**Ubicación:** Carpeta `downloads`{queue_info}{tip_for_large_files}"""
 
             await progress_msg.edit_text(success_text, disable_web_page_preview=True)
             
@@ -789,7 +900,14 @@ async def process_single_file(client, message, user_id, current_position, total_
 
         except Exception as download_error:
             logger.error(f"❌ Error en descarga: {download_error}", exc_info=True)
-            await progress_msg.edit_text(f"❌ Error al descargar el archivo: {str(download_error)}")
+            error_text = f"❌ Error al descargar el archivo: {str(download_error)}"
+            
+            # Mensaje específico para errores de memoria
+            if "memory" in str(download_error).lower() or "Memory" in str(download_error):
+                error_text += "\n\n⚠️ **ERROR DE MEMORIA:** Archivo demasiado grande para el servidor."
+                error_text += "\n**Solución:** Divide el archivo en partes más pequeñas antes de subir."
+            
+            await progress_msg.edit_text(error_text)
         
         if user_id in user_queues and user_queues[user_id]:
             user_queues[user_id].pop(0)
@@ -800,7 +918,14 @@ async def process_single_file(client, message, user_id, current_position, total_
     except Exception as e:
         logger.error(f"❌ Error procesando archivo individual: {e}", exc_info=True)
         try:
-            await message.reply_text(f"❌ Error procesando archivo: {str(e)}")
+            error_msg = f"❌ Error procesando archivo: {str(e)}"
+            
+            # Mensaje específico para errores de memoria/tiempo
+            if "timeout" in str(e).lower() or "time out" in str(e):
+                error_msg += "\n\n⏰ **TIEMPO AGOTADO:** El archivo es demasiado grande."
+                error_msg += "\n**Solución:** Divide archivos >1GB antes de subir."
+            
+            await message.reply_text(error_msg)
         except:
             pass
         
