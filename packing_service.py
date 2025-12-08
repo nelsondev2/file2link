@@ -15,7 +15,7 @@ class SimplePackingService:
         self.max_part_size_mb = MAX_PART_SIZE_MB
     
     def pack_folder(self, user_id, split_size_mb=None):
-        """Empaqueta la carpeta del usuario con división ZIP nativa"""
+        """Empaqueta la carpeta del usuario y divide en partes crudas si se especifica"""
         try:
             can_start, message = load_manager.can_start_process()
             if not can_start:
@@ -37,7 +37,7 @@ class SimplePackingService:
                 base_filename = f"packed_files_{timestamp}"
                 
                 if split_size_mb:
-                    result = self._pack_split_zipfile(user_id, user_dir, packed_dir, base_filename, split_size_mb)
+                    result = self._pack_and_split_raw(user_id, user_dir, packed_dir, base_filename, split_size_mb)
                 else:
                     result = self._pack_single_simple(user_id, user_dir, packed_dir, base_filename)
                 
@@ -102,8 +102,8 @@ class SimplePackingService:
             logger.error(f"Error en _pack_single_simple: {e}")
             raise e
     
-    def _pack_split_zipfile(self, user_id, user_dir, packed_dir, base_filename, split_size_mb):
-        """Crea un archivo ZIP dividido nativo usando ZipFile directamente"""
+    def _pack_and_split_raw(self, user_id, user_dir, packed_dir, base_filename, split_size_mb):
+        """Crea un archivo ZIP y luego lo divide en partes crudas (.001, .002, etc.)"""
         split_size_bytes = min(split_size_mb, self.max_part_size_mb) * 1024 * 1024
         
         try:
@@ -119,86 +119,78 @@ class SimplePackingService:
             if total_files == 0:
                 return None, "No se encontraron archivos para empaquetar"
             
-            # Contador para partes
-            part_num = 1
+            logger.info(f"Creando archivo ZIP y dividiendo en partes de {split_size_mb}MB")
+            
+            # PASO 1: Crear el archivo ZIP temporal
+            temp_zip_path = os.path.join(packed_dir, f"temp_{base_filename}.zip")
+            
+            with zipfile.ZipFile(temp_zip_path, 'w', compression=zipfile.ZIP_STORED) as zipf:
+                for filename, file_path in all_files:
+                    try:
+                        zipf.write(file_path, filename)
+                        logger.info(f"Agregado al ZIP: {filename}")
+                    except Exception as e:
+                        logger.error(f"Error agregando {filename} al ZIP: {e}")
+                        continue
+            
+            zip_size = os.path.getsize(temp_zip_path)
+            logger.info(f"ZIP creado: {temp_zip_path} ({zip_size/(1024*1024):.2f}MB)")
+            
+            # PASO 2: Dividir el archivo ZIP en partes crudas
             part_files = []
-            current_part_size = 0
-            current_zip = None
+            part_num = 1
             
-            logger.info(f"Creando archivo ZIP dividido en partes de {split_size_mb}MB")
-            
-            # Procesar cada archivo
-            for idx, (filename, file_path) in enumerate(all_files):
-                file_size = os.path.getsize(file_path)
-                
-                # Si no hay ZIP actual o añadir este archivo excedería el tamaño máximo
-                if current_zip is None or (current_part_size + file_size > split_size_bytes):
-                    # Cerrar ZIP anterior si existe
-                    if current_zip is not None:
-                        current_zip.close()
+            with open(temp_zip_path, 'rb') as zip_file:
+                while True:
+                    # Leer el chunk del tamaño especificado
+                    chunk = zip_file.read(split_size_bytes)
+                    if not chunk:
+                        break
                     
-                    # Crear nuevo archivo ZIP
-                    part_filename = f"{base_filename}.zip.part{part_num:03d}"
+                    # Crear nombre de parte (.001, .002, etc.)
+                    part_filename = f"{base_filename}.zip.{part_num:03d}"
                     part_path = os.path.join(packed_dir, part_filename)
                     
-                    current_zip = zipfile.ZipFile(part_path, 'w', compression=zipfile.ZIP_STORED)
-                    current_part_size = 0
+                    # Escribir la parte
+                    with open(part_path, 'wb') as part_file:
+                        part_file.write(chunk)
                     
-                    # Registrar la parte anterior
-                    if part_num > 1:
-                        previous_part_filename = f"{base_filename}.zip.part{part_num-1:03d}"
-                        previous_part_path = os.path.join(packed_dir, previous_part_filename)
-                        previous_size = os.path.getsize(previous_part_path)
-                        
-                        file_num = file_service.register_file(user_id, previous_part_filename, previous_part_filename, "packed")
-                        download_url = file_service.create_packed_url(user_id, previous_part_filename)
-                        
-                        part_files.append({
-                            'number': file_num,
-                            'filename': previous_part_filename,
-                            'url': download_url,
-                            'size_mb': previous_size / (1024 * 1024)
-                        })
-                
-                # Añadir archivo al ZIP actual
-                try:
-                    current_zip.write(file_path, filename)
-                    current_part_size += file_size
-                    logger.info(f"Agregado a parte {part_num}: {filename} ({file_size/(1024*1024):.1f}MB)")
-                except Exception as e:
-                    logger.error(f"Error agregando {filename} al ZIP parte {part_num}: {e}")
-                    continue
-                
-                # Si hemos alcanzado el límite, pasar a siguiente parte
-                if current_part_size >= split_size_bytes:
-                    current_zip.close()
+                    part_size = len(chunk)
+                    part_size_mb = part_size / (1024 * 1024)
+                    
+                    # Registrar la parte
+                    file_num = file_service.register_file(user_id, part_filename, part_filename, "packed")
+                    download_url = file_service.create_packed_url(user_id, part_filename)
+                    
+                    part_files.append({
+                        'number': file_num,
+                        'filename': part_filename,
+                        'url': download_url,
+                        'size_mb': part_size_mb,
+                        'total_files': total_files if part_num == 1 else 0  # Solo el primero tiene el total
+                    })
+                    
+                    logger.info(f"Parte {part_num} creada: {part_filename} ({part_size_mb:.2f}MB)")
                     part_num += 1
-                    current_zip = None
             
-            # Cerrar el último ZIP si existe
-            if current_zip is not None:
-                current_zip.close()
-                
-                # Registrar la última parte
-                last_part_filename = f"{base_filename}.zip.part{part_num:03d}"
-                last_part_path = os.path.join(packed_dir, last_part_filename)
-                last_size = os.path.getsize(last_part_path)
-                
-                file_num = file_service.register_file(user_id, last_part_filename, last_part_filename, "packed")
-                download_url = file_service.create_packed_url(user_id, last_part_filename)
-                
-                part_files.append({
-                    'number': file_num,
-                    'filename': last_part_filename,
-                    'url': download_url,
-                    'size_mb': last_size / (1024 * 1024)
-                })
+            # Eliminar el archivo ZIP temporal
+            os.remove(temp_zip_path)
+            logger.info(f"Archivo temporal eliminado: {temp_zip_path}")
             
-            total_size = sum(part['size_mb'] for part in part_files)
-            return part_files, f"Empaquetado completado: {len(part_files)} partes, {total_files} archivos, {total_size:.1f}MB total"
+            # Verificar que se crearon partes
+            if not part_files:
+                return None, "No se crearon partes. Error en la división del archivo."
+            
+            total_size_mb = sum(part['size_mb'] for part in part_files)
+            
+            return part_files, f"✅ Empaquetado completado: {len(part_files)} partes, {total_files} archivos, {total_size_mb:.1f}MB total"
             
         except Exception as e:
-            logger.error(f"Error en _pack_split_zipfile: {e}")
+            logger.error(f"Error en _pack_and_split_raw: {e}", exc_info=True)
+            # Limpiar archivos temporales en caso de error
+            temp_zip_path = os.path.join(packed_dir, f"temp_{base_filename}.zip")
+            if os.path.exists(temp_zip_path):
+                os.remove(temp_zip_path)
             raise e
 
     def clear_packed_folder(self, user_id):
