@@ -386,7 +386,7 @@ async def pack_command(client, message):
                 if split_size <= 0:
                     await message.reply_text("❌ El tamaño de división debe ser mayor a 0 MB")
                     return
-                if split_size > 200:
+                if split_size > 501:
                     await message.reply_text("❌ El tamaño máximo por parte es 200 MB")
                     return
             except ValueError:
