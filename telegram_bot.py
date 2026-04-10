@@ -27,7 +27,8 @@ class TelegramBot:
                 bot_token=BOT_TOKEN
             )
 
-            await self.setup_handlers()
+            # ✅ CORREGIDO: setup_handlers es sincrónico, no usar await
+            self.setup_handlers()
             
             logger.info("Iniciando cliente de Telegram...")
             await self.client.start()
