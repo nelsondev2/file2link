@@ -1,6 +1,7 @@
 import os
 
 # ===== CONFIGURACIÓN OPTIMIZADA =====
+VERSION = "2.0.0"  # Versión mejorada del bot
 API_ID = int(os.getenv("API_ID", "12345678"))
 API_HASH = os.getenv("API_HASH", "tu_api_hash")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "tu_bot_token")

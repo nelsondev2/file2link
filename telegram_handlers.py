@@ -4,119 +4,193 @@ import sys
 import time
 import asyncio
 import concurrent.futures
+from typing import Dict, List, Optional, Any
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.errors import FloodWait, MessageNotModified
 
 from load_manager import load_manager
 from file_service import file_service
 from progress_service import progress_service
 from packing_service import packing_service
 from download_service import fast_download_service
-from config import MAX_FILE_SIZE, MAX_FILE_SIZE_MB
+from config import MAX_FILE_SIZE, MAX_FILE_SIZE_MB, VERSION
 
 logger = logging.getLogger(__name__)
 
-# ===== SISTEMA DE SESIÓN POR USUARIO =====
-user_sessions = {}
-user_queues = {}
-user_progress_msgs = {}
-user_current_processing = {}
-user_batch_totals = {}
+# ===== CONSTANTES DE CONFIGURACIÓN =====
+ITEMS_PER_PAGE = 10
+PROGRESS_UPDATE_INTERVAL = 0.5  # segundos
+MAX_PROGRESS_MESSAGE_LENGTH = 4000
+QUEUE_CHECK_INTERVAL = 1  # segundos entre archivos en cola
 
-def get_user_session(user_id):
-    """Obtiene o crea la sesión del usuario"""
+# ===== SISTEMA DE SESIÓN POR USUARIO =====
+user_sessions: Dict[int, Dict[str, Any]] = {}
+user_queues: Dict[int, List[Message]] = {}
+user_progress_msgs: Dict[int, Message] = {}
+user_current_processing: Dict[int, int] = {}
+user_batch_totals: Dict[int, int] = {}
+user_last_activity: Dict[int, float] = {}  # Para limpieza automática
+
+
+def get_user_session(user_id: int) -> Dict[str, Any]:
+    """Obtiene o crea la sesión del usuario con inicialización segura"""
     if user_id not in user_sessions:
-        user_sessions[user_id] = {'current_folder': 'downloads'}
+        user_sessions[user_id] = {
+            'current_folder': 'downloads',
+            'last_command': None,
+            'preferences': {
+                'show_progress': True,
+                'compact_mode': False
+            }
+        }
+        user_last_activity[user_id] = time.time()
     return user_sessions[user_id]
+
+
+def update_user_activity(user_id: int):
+    """Actualiza el timestamp de última actividad del usuario"""
+    user_last_activity[user_id] = time.time()
+
+
+def create_navigation_keyboard(page: int, total_pages: int, user_id: int) -> InlineKeyboardMarkup:
+    """Crea un teclado inline para navegación de páginas"""
+    keyboard = []
+    row = []
+    
+    if total_pages > 1:
+        if page > 1:
+            row.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"nav_prev_{user_id}_{page-1}"))
+        
+        row.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="nav_info"))
+        
+        if page < total_pages:
+            row.append(InlineKeyboardButton("Siguiente ➡️", callback_data=f"nav_next_{user_id}_{page+1}"))
+        
+        keyboard.append(row)
+    
+    # Botones de acción rápida
+    keyboard.append([
+        InlineKeyboardButton("🗑️ Eliminar", callback_data=f"action_delete_{user_id}"),
+        InlineKeyboardButton("✏️ Renombrar", callback_data=f"action_rename_{user_id}")
+    ])
+    
+    return InlineKeyboardMarkup(keyboard)
 
 # ===== COMANDOS DE NAVEGACIÓN =====
 
 async def start_command(client, message):
-    """Maneja el comando /start"""
+    """Maneja el comando /start con mensaje de bienvenida profesional"""
     try:
         user = message.from_user
+        update_user_activity(user.id)
         
-        welcome_text = f"""👋 **Bienvenido/a {user.first_name}!**
+        welcome_text = f"""👋 **¡Hola {user.first_name}!**
 
-🤖 File2Link Bot - Sistema de Gestión de Archivos por Carpetas
+🤖 **File2Link Bot** - Tu gestor de archivos en la nube
 
-**📁 SISTEMA DE CARPETAS:**
-`/cd downloads` - Acceder a archivos de descarga
-`/cd packed` - Acceder a archivos empaquetados
-`/cd` - Mostrar carpeta actual
+━━━━━━━━━━━━━━━━━━━━━━
+📁 **GESTIÓN POR CARPETAS**
 
-**📄 COMANDOS EN CARPETA:**
-`/list` - Listar archivos de la carpeta actual
-`/rename <número> <nuevo_nombre>`
-`/delete <número>`
-`/clear` - Vaciar carpeta actual
+`/cd downloads` → Archivos de descarga
+`/cd packed` → Archivos empaquetados
+`/cd` → Ver carpeta actual
 
-**📦 EMPAQUETADO:**
-`/pack` - Empaquetar downloads → packed
-`/pack <MB>` - Empaquetar y dividir
+📄 **COMANDOS EN CARPETA**
+`/list` → Listar archivos
+`/rename <nº> <nombre>` → Renombrar
+`/delete <nº>` → Eliminar archivo
+`/clear` → Vaciar carpeta
 
-**🔄 GESTIÓN DE COLA:**
-`/queue` - Ver archivos en cola de descarga
-`/clearqueue` - Limpiar cola de descarga
+📦 **EMPAQUETADO**
+`/pack` → Empaquetar downloads → packed
+`/pack <MB>` → Dividir en partes
 
-**🔍 INFORMACIÓN:**
-`/status` - Estado del sistema
-`/help` - Ayuda completa
+🔄 **COLA DE DESCARGA**
+`/queue` → Ver archivos en cola
+`/clearqueue` → Limpiar cola
 
-**📏 LÍMITE DE ARCHIVOS:**
-Tamaño máximo: {MAX_FILE_SIZE_MB} MB
+🔍 **INFORMACIÓN**
+`/status` → Estado del sistema
+`/help` → Ayuda completa
 
-**¡Envía archivos o usa /cd para comenzar!**"""
+━━━━━━━━━━━━━━━━━━━━━━
+📏 **LÍMITES**
+• Tamaño máximo: **{MAX_FILE_SIZE_MB} MB** por archivo
+• Carpetas ilimitadas
+• Descargas ilimitadas
+
+💡 **Consejo:** Envía archivos directamente al bot para comenzar.
+━━━━━━━━━━━━━━━━━━━━━━"""
 
         await message.reply_text(welcome_text)
-        logger.info(f"/start recibido de {user.id} - {user.first_name}")
+        logger.info(f"✅ /start recibido de {user.id} - {user.first_name}")
 
     except Exception as e:
-        logger.error(f"Error en /start: {e}")
+        logger.error(f"❌ Error en /start: {e}")
+
 
 async def help_command(client, message):
-    """Maneja el comando /help"""
+    """Maneja el comando /help con guía detallada"""
     try:
-        help_text = f"""📚 **Ayuda - Sistema de Carpetas**
+        update_user_activity(message.from_user.id)
+        
+        help_text = f"""📚 **Guía Completa - File2Link Bot**
 
-**📁 NAVEGACIÓN:**
-`/cd downloads` - Archivos de descarga
-`/cd packed` - Archivos empaquetados  
-`/cd` - Carpeta actual
+━━━━━━━━━━━━━━━━━━━━━━
+📁 **NAVEGACIÓN ENTRE CARPETAS**
+━━━━━━━━━━━━━━━━━━━━━━
+`/cd downloads` - Acceder a archivos de descarga
+`/cd packed` - Acceder a archivos empaquetados  
+`/cd` - Mostrar carpeta actual
 
-**📄 GESTIÓN (en carpeta actual):**
-`/list` - Ver archivos
-`/rename N NUEVO_NOMBRE` - Renombrar
-`/delete N` - Eliminar archivo
-`/clear` - Vaciar carpeta
+📄 **GESTIÓN DE ARCHIVOS** (en carpeta actual)
+━━━━━━━━━━━━━━━━━━━━━━
+`/list` - Ver todos los archivos
+`/list <página>` - Paginación de resultados
+`/rename N NUEVO_NOMBRE` - Renombrar archivo #N
+`/delete N` - Eliminar archivo #N
+`/clear` - Vaciar carpeta completa
 
-**📦 EMPAQUETADO:**
-`/pack` - Crear ZIP de downloads
-`/pack MB` - Dividir en partes
+📦 **EMPAQUETADO Y COMPRESIÓN**
+━━━━━━━━━━━━━━━━━━━━━━
+`/pack` - Crear ZIP con todos los downloads
+`/pack 100` - Dividir en partes de 100 MB
+`/pack 500` - Dividir en partes de 500 MB
 
-**🔄 GESTIÓN DE COLA:**
-`/queue` - Ver archivos en cola de descarga
-`/clearqueue` - Limpiar cola de descarga
+🔄 **GESTIÓN DE COLA**
+━━━━━━━━━━━━━━━━━━━━━━
+`/queue` - Ver archivos en espera
+`/clearqueue` - Cancelar descargas pendientes
 
-**🔍 INFORMACIÓN:**
-`/status` - Estado del sistema
-`/help` - Esta ayuda
+🔍 **INFORMACIÓN DEL SISTEMA**
+━━━━━━━━━━━━━━━━━━━━━━
+`/status` - Estado completo del sistema
+`/help` - Esta guía de ayuda
 
-**📏 LÍMITE DE ARCHIVOS:**
-Tamaño máximo: {MAX_FILE_SIZE_MB} MB
+📏 **LÍMITES DE USO**
+━━━━━━━━━━━━━━━━━━━━../../telegram_handlers.py
+Tamaño máximo por archivo: **{MAX_FILE_SIZE_MB} MB**
 
-**📌 EJEMPLOS:**
-`/cd downloads`
-`/list`
-`/delete 5`
-`/rename 3 mi_documento`
-`/pack 100`
-`/queue` - Ver qué archivos están en cola"""
+💡 **EJEMPLOS PRÁCTICOS**
+━━━━━━━━━━━━━━━━━━━━━━
+1️⃣ Enviar un archivo → Se guarda en `downloads`
+2️⃣ `/list` → Ver archivos disponibles
+3️⃣ `/pack 100` → Comprimir en partes de 100MB
+4️⃣ `/cd packed` → Ir a carpeta empaquetados
+5️⃣ `/list` → Ver archivos comprimidos
+
+🎯 **COMANDOS RÁPIDOS**
+━━━━━━━━━━━━━━━━━━━━━━
+• Los números de archivo son persistentes
+• Usa `/list` para ver los números actuales
+• Los enlaces de descarga son permanentes"""
 
         await message.reply_text(help_text)
+        logger.info(f"✅ /help enviado a {message.from_user.id}")
 
     except Exception as e:
-        logger.error(f"Error en /help: {e}")
+        logger.error(f"❌ Error en /help: {e}")
 
 async def cd_command(client, message):
     """Maneja el comando /cd - Cambiar carpeta actual"""
@@ -327,9 +401,10 @@ async def rename_command(client, message):
         await message.reply_text("❌ Error al renombrar archivo.")
 
 async def status_command(client, message):
-    """Maneja el comando /status - Estado del sistema"""
+    """Maneja el comando /status - Estado profesional del sistema"""
     try:
         user_id = message.from_user.id
+        update_user_activity(user_id)
         session = get_user_session(user_id)
         
         downloads_count = len(file_service.list_user_files(user_id, "downloads"))
@@ -338,29 +413,40 @@ async def status_command(client, message):
         size_mb = total_size / (1024 * 1024)
         
         system_status = load_manager.get_status()
+        server_state = "✅ Óptimo" if system_status['can_accept_work'] else "⚠️ Ocupado"
         
-        status_text = f"""**📊 ESTADO DEL SISTEMA - {message.from_user.first_name}**
+        status_text = f"""📊 **Estado del Sistema**
 
-**👤 USUARIO:**
-• **ID:** `{user_id}`
-• **Carpeta actual:** `{session['current_folder']}`
-• **Archivos downloads:** {downloads_count}
-• **Archivos packed:** {packed_count}
-• **Espacio usado:** {size_mb:.2f} MB
+━━━━━━━━━━━━━━━━━━━━━━
+👤 **TU CUENTA**
+━━━━━━━━━━━━━━━━━━━━━━
+• ID: `{user_id}`
+• Carpeta actual: `{session['current_folder']}`
+• Archivos en downloads: **{downloads_count}**
+• Archivos empaquetados: **{packed_count}**
+• Espacio usado: **{size_mb:.2f} MB**
 
-**📏 CONFIGURACIÓN:**
-• **Límite por archivo:** {MAX_FILE_SIZE_MB} MB
+━━━━━━━━━━━━━━━━━━━━━━
+📏 **CONFIGURACIÓN**
+━━━━━━━━━━━━━━━━━━━━━━
+• Límite por archivo: **{MAX_FILE_SIZE_MB} MB**
+• Compresión: **ZIP con división**
 
-**🖥️ SERVIDOR:**
-• **Procesos activos:** {system_status['active_processes']}/{system_status['max_processes']}
-• **Uso de CPU:** {system_status['cpu_percent']:.1f}%
-• **Uso de memoria:** {system_status['memory_percent']:.1f}%
-• **Estado:** {"✅ ACEPTANDO TRABAJO" if system_status['can_accept_work'] else "⚠️ SOBRECARGADO"}"""
+━━━━━━━━━━━━━━━━━━━━━━
+🖥️ **SERVIDOR**
+━━━━━━━━━━━━━━━━━━━━━━
+• Procesos: {system_status['active_processes']}/{system_status['max_processes']}
+• CPU: {system_status['cpu_percent']:.1f}%
+• Memoria: {system_status['memory_percent']:.1f}%
+• Estado: **{server_state}**
+
+━━━━━━━━━━━━━━━━━━━━━━
+💡 **Consejo:** Usa `/pack` para comprimir tus archivos."""
         
         await message.reply_text(status_text)
         
     except Exception as e:
-        logger.error(f"Error en /status: {e}")
+        logger.error(f"❌ Error en /status: {e}")
         await message.reply_text("❌ Error al obtener estado.")
 
 async def pack_command(client, message):
@@ -854,25 +940,36 @@ async def process_single_file(client, message, user_id, current_position, total_
             del user_current_processing[user_id]
 
 def setup_handlers(client):
-    """Configura todos los handlers del bot"""
+    """Configura todos los handlers del bot de forma profesional"""
+    
+    # Comandos principales
     client.on_message(filters.command("start") & filters.private)(start_command)
     client.on_message(filters.command("help") & filters.private)(help_command)
     client.on_message(filters.command("status") & filters.private)(status_command)
     
+    # Navegación y gestión de carpetas
     client.on_message(filters.command("cd") & filters.private)(cd_command)
     client.on_message(filters.command("list") & filters.private)(list_command)
+    
+    # Gestión de archivos
     client.on_message(filters.command("delete") & filters.private)(delete_command)
     client.on_message(filters.command("clear") & filters.private)(clear_command)
     client.on_message(filters.command("rename") & filters.private)(rename_command)
     
+    # Empaquetado
     client.on_message(filters.command("pack") & filters.private)(pack_command)
     
+    # Gestión de cola
     client.on_message(filters.command("queue") & filters.private)(queue_command)
     client.on_message(filters.command("clearqueue") & filters.private)(clear_queue_command)
     
+    # Limpieza
     client.on_message(filters.command("cleanup") & filters.private)(cleanup_command)
     
+    # Manejo de archivos multimedia
     client.on_message(
         (filters.document | filters.video | filters.audio | filters.photo) &
         filters.private
     )(handle_file)
+    
+    logger.info("✅ Handlers configurados correctamente")
