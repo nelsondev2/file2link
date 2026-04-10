@@ -1,10 +1,10 @@
 import os
 
 # ===== CONFIGURACIÓN OPTIMIZADA =====
-API_ID = int(os.getenv("API_ID", "12345678"))
-API_HASH = os.getenv("API_HASH", "tu_api_hash")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "tu_bot_token")
-RENDER_DOMAIN = os.getenv("RENDER_DOMAIN", "https://nelson-file2link.onrender.com")
+API_ID = int(os.getenv("API_ID", "14681595"))
+API_HASH = os.getenv("API_HASH", "a86730aab5c59953c424abb4396d32d5")  # Este es un token, NO un API_HASH
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8534765454:AAFyWB3TFWLZKcDu0RNC1hCMwSMqQZ9_-3g")
+RENDER_DOMAIN = os.getenv("RENDER_DOMAIN", "https://file2link-4dye.onrender.com")
 BASE_DIR = "storage"
 PORT = int(os.getenv("PORT", 8080))
 
