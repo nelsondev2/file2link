@@ -36,11 +36,6 @@ async def start_command(client, message):
     try:
         user = message.from_user
         
-        # Verificación rápida de configuración
-        if not API_ID or API_ID == 12345678:
-            await message.reply_text("⚠️ **Error de configuración:** API_ID no válido. Contacta al administrador.")
-            return
-        
         welcome_text = f"""👋 **Bienvenido/a {user.first_name}!**
 
 🤖 File2Link Bot - Sistema de Gestión de Archivos por Carpetas
@@ -78,7 +73,6 @@ Tamaño máximo: {MAX_FILE_SIZE_MB} MB
 
     except Exception as e:
         logger.error(f"Error en /start: {e}")
-        await message.reply_text(f"❌ Error interno en /start: {str(e)}")
 
 async def help_command(client, message):
     """Maneja el comando /help"""
@@ -123,7 +117,6 @@ Tamaño máximo: {MAX_FILE_SIZE_MB} MB
 
     except Exception as e:
         logger.error(f"Error en /help: {e}")
-        await message.reply_text(f"❌ Error interno en /help: {str(e)}")
 
 async def cd_command(client, message):
     """Maneja el comando /cd - Cambiar carpeta actual"""
@@ -151,7 +144,7 @@ async def cd_command(client, message):
 
     except Exception as e:
         logger.error(f"Error en /cd: {e}")
-        await message.reply_text(f"❌ Error interno en /cd: {str(e)}")
+        await message.reply_text("❌ Error al cambiar carpeta.")
 
 async def list_command(client, message):
     """Maneja el comando /list - Listar archivos de la carpeta actual CON PAGINACIÓN"""
@@ -232,7 +225,7 @@ async def list_command(client, message):
 
     except Exception as e:
         logger.error(f"Error en /list: {e}")
-        await message.reply_text(f"❌ Error interno en /list: {str(e)}")
+        await message.reply_text("❌ Error al listar archivos.")
 
 async def delete_command(client, message):
     """Maneja el comando /delete - Eliminar archivo actual"""
@@ -266,7 +259,7 @@ async def delete_command(client, message):
             
     except Exception as e:
         logger.error(f"Error en /delete: {e}")
-        await message.reply_text(f"❌ Error interno en /delete: {str(e)}")
+        await message.reply_text("❌ Error al eliminar archivo.")
 
 async def clear_command(client, message):
     """Maneja el comando /clear - Vaciar carpeta actual"""
@@ -284,7 +277,7 @@ async def clear_command(client, message):
             
     except Exception as e:
         logger.error(f"Error en /clear: {e}")
-        await message.reply_text(f"❌ Error interno en /clear: {str(e)}")
+        await message.reply_text("❌ Error al vaciar carpeta.")
 
 async def rename_command(client, message):
     """Maneja el comando /rename - Renombrar archivo actual"""
@@ -331,7 +324,7 @@ async def rename_command(client, message):
             
     except Exception as e:
         logger.error(f"Error en comando /rename: {e}")
-        await message.reply_text(f"❌ Error interno en /rename: {str(e)}")
+        await message.reply_text("❌ Error al renombrar archivo.")
 
 async def status_command(client, message):
     """Maneja el comando /status - Estado del sistema"""
@@ -368,7 +361,7 @@ async def status_command(client, message):
         
     except Exception as e:
         logger.error(f"Error en /status: {e}")
-        await message.reply_text(f"❌ Error interno en /status: {str(e)}")
+        await message.reply_text("❌ Error al obtener estado.")
 
 async def pack_command(client, message):
     """Maneja el comando /pack - Empaquetado COMPLETO como el original"""
@@ -463,7 +456,7 @@ async def pack_command(client, message):
             if list_filename and os.path.exists(os.path.join(user_dir, list_filename)):
                 list_url = file_service.create_packed_url(user_id, list_filename)
             
-            # CONSTRUIR MENSAJE COMPLETO CON TODOS LOS ENLACES
+            # CONSTRUIR MENSAJE COMPLETO CON TODOS LOS ENLACES (COMO EL ORIGINAL)
             response_text = f"""✅ **Empaquetado Completado{total_files_info}**
 
 **Archivos Generados:** {len(files)} partes
@@ -471,19 +464,23 @@ async def pack_command(client, message):
 
 **Enlaces de Descarga:**"""
             
+            # Agregar TODOS los enlaces en el mensaje (como el original)
             for file_info in files:
                 response_text += f"\n\n**{file_info['filename']}**\n"
                 response_text += f"🔗 {file_info['url']}"
             
+            # Agregar enlace al archivo .txt si existe
             if list_url:
                 response_text += f"\n\n**📑 Lista completa en archivo:**"
                 response_text += f"\n🔗 [{list_filename}]({list_url})"
             
             response_text += "\n\n**Nota:** Usa `/cd packed` y `/list` para ver tus archivos empaquetados"
             
+            # Manejar mensajes largos (dividir si es necesario)
             if len(response_text) > 4000:
                 await status_msg.edit_text("✅ **Empaquetado completado**\n\nLos enlaces se enviarán en varios mensajes...")
                 
+                # Enviar primero el mensaje con estadísticas
                 stats_msg = f"""✅ **Empaquetado Completado{total_files_info}**
 
 **Archivos Generados:** {len(files)} partes
@@ -495,6 +492,7 @@ async def pack_command(client, message):
                 
                 await message.reply_text(stats_msg, disable_web_page_preview=True)
                 
+                # Enviar enlaces en grupos de 10
                 for i in range(0, len(files), 10):
                     group = files[i:i+10]
                     group_text = ""
@@ -517,7 +515,7 @@ async def pack_command(client, message):
         await status_msg.edit_text("❌ El empaquetado tardó demasiado tiempo. Intenta con menos archivos.")
     except Exception as e:
         logger.error(f"Error en comando /pack optimizado: {e}")
-        await message.reply_text(f"❌ Error interno en /pack: {str(e)}")
+        await message.reply_text("❌ Error en el proceso de empaquetado.")
 
 async def queue_command(client, message):
     """Maneja el comando /queue - Ver estado de la cola de descargas"""
@@ -552,7 +550,7 @@ async def queue_command(client, message):
         
     except Exception as e:
         logger.error(f"Error en /queue: {e}")
-        await message.reply_text(f"❌ Error interno en /queue: {str(e)}")
+        await message.reply_text("❌ Error al obtener estado de la cola.")
 
 async def clear_queue_command(client, message):
     """Maneja el comando /clearqueue - Limpiar cola de descargas"""
@@ -576,7 +574,7 @@ async def clear_queue_command(client, message):
         
     except Exception as e:
         logger.error(f"Error en /clearqueue: {e}")
-        await message.reply_text(f"❌ Error interno en /clearqueue: {str(e)}")
+        await message.reply_text("❌ Error al limpiar la cola.")
 
 async def cleanup_command(client, message):
     """Limpia archivos temporales y optimiza el sistema"""
@@ -594,7 +592,7 @@ async def cleanup_command(client, message):
         
     except Exception as e:
         logger.error(f"Error en comando cleanup: {e}")
-        await message.reply_text(f"❌ Error interno en /cleanup: {str(e)}")
+        await message.reply_text("❌ Error durante la limpieza.")
 
 async def handle_file(client, message):
     """Maneja la recepción de archivos con sistema de cola MEJORADO"""
@@ -634,12 +632,12 @@ async def handle_file(client, message):
     except Exception as e:
         logger.error(f"Error procesando archivo: {e}", exc_info=True)
         try:
-            await message.reply_text(f"❌ Error al procesar el archivo: {str(e)}")
+            await message.reply_text("❌ Error al procesar el archivo.")
         except:
             pass
 
 async def process_file_queue(client, user_id):
-    """Procesa la cola de archivos del usuario de manera secuencial"""
+    """Procesa la cola de archivos del usuario de manera secuencial - VERSIÓN CORREGIDA"""
     try:
         total_files_in_batch = len(user_queues[user_id])
         user_batch_totals[user_id] = total_files_in_batch
@@ -667,7 +665,7 @@ async def process_file_queue(client, user_id):
             del user_batch_totals[user_id]
 
 async def process_single_file(client, message, user_id, current_position, total_files):
-    """Procesa un solo archivo con progreso y descarga rápida"""
+    """Procesa un solo archivo con progreso MEJORADO y descarga rápida"""
     max_retries = 3
     start_time = time.time()
     
@@ -878,5 +876,3 @@ def setup_handlers(client):
         (filters.document | filters.video | filters.audio | filters.photo) &
         filters.private
     )(handle_file)
-    
-    logger.info("✅ Handlers configurados correctamente")

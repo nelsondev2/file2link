@@ -3,15 +3,7 @@ import logging
 import threading
 import time
 import sys
-import asyncio
 from waitress import serve
-
-# Crear event loop para el hilo principal
-try:
-    loop = asyncio.get_event_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
 
 from config import BASE_DIR, PORT
 from telegram_bot import TelegramBot
@@ -42,7 +34,6 @@ if __name__ == '__main__':
     
     logger.info(f"Directorios creados/verificados: {BASE_DIR}")
 
-    # Crear un nuevo event loop para el hilo del bot
     bot_thread = threading.Thread(target=start_telegram_bot, daemon=True)
     bot_thread.start()
 

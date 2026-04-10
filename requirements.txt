@@ -4,6 +4,3 @@ pyrogram==2.0.106
 TgCrypto==1.2.5
 waitress==3.0.0
 psutil==5.9.8
-# Agrega esto si no está:
-pyaes==1.6.1
-PySocks==1.7.1
