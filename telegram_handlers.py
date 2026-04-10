@@ -4,7 +4,7 @@ import time
 import asyncio
 import concurrent.futures
 
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from pyrogram.types import (
     Message,
     InlineKeyboardMarkup,
@@ -37,6 +37,22 @@ def get_session(user_id: int) -> dict:
 
 
 # ─────────────────────────────────────────────
+#  ESCAPE DE MARKDOWN (evita ENTITY_BOUNDS_INVALID)
+# ─────────────────────────────────────────────
+
+def _esc(text: str) -> str:
+    """Escapa caracteres especiales de Markdown v1 en texto plano."""
+    for ch in ("_", "*", "`", "["):
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+
+def _safe_code(text: str) -> str:
+    """Devuelve texto en código inline escapando backticks."""
+    return f"`{text.replace('`', chr(96))}`"
+
+
+# ─────────────────────────────────────────────
 #  TECLADOS INLINE REUTILIZABLES
 # ─────────────────────────────────────────────
 
@@ -54,7 +70,7 @@ def kb_main_menu() -> InlineKeyboardMarkup:
     ])
 
 
-def kb_folder_actions(folder: str) -> InlineKeyboardMarkup:
+def kb_folder(folder: str) -> InlineKeyboardMarkup:
     other = "packed" if folder == "downloads" else "downloads"
     other_label = "📦 Ir a Empaquetados" if folder == "downloads" else "📥 Ir a Descargas"
     return InlineKeyboardMarkup([
@@ -63,119 +79,173 @@ def kb_folder_actions(folder: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(other_label, callback_data=f"cd:{other}"),
         ],
         [
-            InlineKeyboardButton("🗑️ Vaciar carpeta", callback_data=f"clear_confirm:{folder}"),
+            InlineKeyboardButton("🗑 Vaciar carpeta", callback_data=f"clear_confirm:{folder}"),
             InlineKeyboardButton("📦 Empaquetar", callback_data="pack"),
         ],
-        [InlineKeyboardButton("🏠 Menú principal", callback_data="main_menu")],
+        [InlineKeyboardButton("🏠 Menu principal", callback_data="main_menu")],
     ])
 
 
-def kb_list_nav(page: int, total_pages: int) -> InlineKeyboardMarkup:
-    nav_row = []
+def kb_list_nav(page: int, total: int) -> InlineKeyboardMarkup:
+    nav = []
     if page > 1:
-        nav_row.append(InlineKeyboardButton("◀️ Anterior", callback_data=f"list:{page - 1}"))
-    if page < total_pages:
-        nav_row.append(InlineKeyboardButton("Siguiente ▶️", callback_data=f"list:{page + 1}"))
-
-    bottom = [
-        InlineKeyboardButton("🔄 Actualizar", callback_data=f"list:{page}"),
-        InlineKeyboardButton("🏠 Menú", callback_data="main_menu"),
-    ]
-    rows = []
-    if nav_row:
-        rows.append(nav_row)
-    rows.append(bottom)
-    return InlineKeyboardMarkup(rows)
+        nav.append(InlineKeyboardButton("« Anterior", callback_data=f"list:{page - 1}"))
+    nav.append(InlineKeyboardButton(f"{page}/{total}", callback_data="noop"))
+    if page < total:
+        nav.append(InlineKeyboardButton("Siguiente »", callback_data=f"list:{page + 1}"))
+    return InlineKeyboardMarkup([
+        nav,
+        [
+            InlineKeyboardButton("🔄 Actualizar", callback_data=f"list:{page}"),
+            InlineKeyboardButton("🏠 Menu", callback_data="main_menu"),
+        ],
+    ])
 
 
 def kb_confirm_clear(folder: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Sí, vaciar", callback_data=f"clear_do:{folder}"),
+        InlineKeyboardButton("✅ Si, vaciar", callback_data=f"clear_do:{folder}"),
         InlineKeyboardButton("❌ Cancelar", callback_data=f"cd:{folder}"),
     ]])
 
 
-def kb_confirm_delete(file_number: int, folder: str) -> InlineKeyboardMarkup:
+def kb_confirm_delete(num: int, folder: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Sí, eliminar", callback_data=f"delete_do:{file_number}:{folder}"),
+        InlineKeyboardButton("✅ Si, eliminar", callback_data=f"delete_do:{num}:{folder}"),
         InlineKeyboardButton("❌ Cancelar", callback_data="list:1"),
+    ]])
+
+
+def kb_after_upload(folder: str = "downloads") -> InlineKeyboardMarkup:
+    """Botones contextuales tras guardar un archivo."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 Ver mis archivos", callback_data="list:1"),
+            InlineKeyboardButton("📦 Empaquetar todo", callback_data="pack"),
+        ],
+        [
+            InlineKeyboardButton("📥 Ir a Descargas", callback_data="cd:downloads"),
+            InlineKeyboardButton("🏠 Menu", callback_data="main_menu"),
+        ],
+    ])
+
+
+def kb_after_pack() -> InlineKeyboardMarkup:
+    """Botones contextuales tras empaquetar."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📦 Ver empaquetados", callback_data="cd:packed"),
+            InlineKeyboardButton("📋 Ver descargas", callback_data="cd:downloads"),
+        ],
+        [
+            InlineKeyboardButton("🏠 Menu principal", callback_data="main_menu"),
+        ],
+    ])
+
+
+def kb_after_rename() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("📋 Ver archivos", callback_data="list:1"),
+        InlineKeyboardButton("🏠 Menu", callback_data="main_menu"),
     ]])
 
 
 def kb_back() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("📋 Ver archivos", callback_data="list:1"),
-        InlineKeyboardButton("🏠 Menú", callback_data="main_menu"),
+        InlineKeyboardButton("🏠 Menu", callback_data="main_menu"),
     ]])
 
 
 # ─────────────────────────────────────────────
-#  TEXTOS
+#  HELPERS DE TEXTO
 # ─────────────────────────────────────────────
 
+ITEMS_PER_PAGE = 10
+
 WELCOME_TEXT = (
-    "👋 **¡Hola, {name}!** Bienvenido a **File2Link Bot**.\n\n"
+    "👋 **Hola, {name}!** Bienvenido a **File2Link Bot**.\n\n"
     "Guardo tus archivos y genero enlaces de descarga directa.\n\n"
-    "📂 **Carpetas:**\n"
-    "• `downloads` — archivos recibidos\n"
-    "• `packed` — archivos comprimidos (ZIP)\n\n"
-    "📏 **Límite por archivo:** `{limit} MB`\n\n"
-    "Elige una opción 👇"
+    "**Carpetas:**\n"
+    "  downloads — archivos recibidos\n"
+    "  packed — archivos comprimidos (ZIP)\n\n"
+    "**Limite por archivo:** {limit} MB\n\n"
+    "Elige una opcion 👇"
 )
 
 HELP_TEXT = (
-    "📚 **Guía de uso — File2Link Bot**\n\n"
+    "📚 **Guia de uso — File2Link Bot**\n\n"
     "**COMANDOS:**\n"
-    "`/start` — Menú principal\n"
-    "`/cd downloads` | `/cd packed` — Cambiar carpeta\n"
-    "`/list` — Ver archivos de la carpeta activa\n"
-    "`/delete <n>` — Eliminar archivo por número\n"
-    "`/rename <n> <nombre>` — Renombrar archivo\n"
-    "`/clear` — Vaciar carpeta activa\n"
-    "`/pack` — Comprimir descargas en ZIP\n"
-    "`/pack <MB>` — ZIP dividido en partes\n"
-    "`/queue` — Ver cola de descargas\n"
-    "`/clearqueue` — Cancelar cola\n"
-    "`/status` — Estado del sistema\n\n"
-    "**FLUJO TÍPICO:**\n"
-    "1️⃣ Envía archivos → se guardan en `downloads`\n"
-    "2️⃣ `/list` → copia el enlace de descarga\n"
-    "3️⃣ `/pack` → crea un ZIP descargable\n\n"
-    f"📏 **Límite por archivo:** `{MAX_FILE_SIZE_MB} MB`"
+    "/start — Menu principal\n"
+    "/cd downloads | /cd packed — Cambiar carpeta\n"
+    "/list — Ver archivos de la carpeta activa\n"
+    "/delete N — Eliminar archivo por numero\n"
+    "/rename N nombre — Renombrar archivo\n"
+    "/clear — Vaciar carpeta activa\n"
+    "/pack — Comprimir descargas en ZIP\n"
+    "/pack MB — ZIP dividido en partes\n"
+    "/queue — Ver cola de descargas\n"
+    "/clearqueue — Cancelar cola\n"
+    "/status — Estado del sistema\n\n"
+    "**FLUJO TIPICO:**\n"
+    "1. Envia archivos al bot (van a downloads)\n"
+    "2. /list para copiar el enlace de descarga\n"
+    "3. /pack para crear un ZIP descargable\n\n"
+    f"**Limite por archivo:** {MAX_FILE_SIZE_MB} MB"
 )
 
 
-# ─────────────────────────────────────────────
-#  HELPERS
-# ─────────────────────────────────────────────
-
 def _folder_label(folder: str) -> str:
-    return "📥 Descargas" if folder == "downloads" else "📦 Empaquetados"
+    return "Descargas" if folder == "downloads" else "Empaquetados"
+
+
+def _build_status(user_id: int, session: dict) -> str:
+    dl = len(file_service.list_user_files(user_id, "downloads"))
+    pk = len(file_service.list_user_files(user_id, "packed"))
+    mb = file_service.get_user_storage_usage(user_id) / (1024 * 1024)
+    s = load_manager.get_status()
+    icon = "🟢" if s["can_accept_work"] else "🔴"
+    return (
+        "📊 **Estado del sistema**\n\n"
+        "**Tu cuenta:**\n"
+        f"  ID: {user_id}\n"
+        f"  Carpeta activa: {session['current_folder']}\n"
+        f"  Archivos en downloads: {dl}\n"
+        f"  Archivos en packed: {pk}\n"
+        f"  Espacio usado: {mb:.2f} MB\n\n"
+        "**Servidor:**\n"
+        f"  CPU: {s['cpu_percent']:.1f}%\n"
+        f"  Memoria: {s['memory_percent']:.1f}%\n"
+        f"  Procesos: {s['active_processes']}/{s['max_processes']}\n"
+        f"  Estado: {icon} {'Operativo' if s['can_accept_work'] else 'Sobrecargado'}"
+    )
 
 
 def _build_list(files: list, folder: str, page: int, total_pages: int) -> str:
+    """
+    Construye el mensaje de listado sin markdown complejo para evitar
+    ENTITY_BOUNDS_INVALID. Solo usa **negrita** y enlaces planos.
+    """
     label = _folder_label(folder)
-    header = (
-        f"**{label}** — Página {page}/{total_pages}\n"
-        f"**Total:** {len(files)} archivo(s)\n"
-        "─────────────────────────\n\n"
-    )
-    per_page = 10
-    page_files = files[(page - 1) * per_page: page * per_page]
-    items = []
-    for f in page_files:
-        items.append(
-            f"**#{f['number']}** `{f['name']}`\n"
-            f"   📏 {f['size_mb']:.1f} MB · [⬇️ Descargar]({f['url']})"
-        )
-    footer = (
-        "\n\n─────────────────────────\n"
-        "`/delete <n>` · `/rename <n> <nombre>`"
-    )
-    return header + "\n\n".join(items) + footer
+    lines = [
+        f"📂 **{label}** — pagina {page} de {total_pages}",
+        f"Total: {len(files)} archivo(s)\n",
+    ]
+
+    start = (page - 1) * ITEMS_PER_PAGE
+    for f in files[start: start + ITEMS_PER_PAGE]:
+        # Nombre sin caracteres markdown problemáticos
+        safe_name = f["name"].replace("*", "").replace("_", " ").replace("`", "")
+        lines.append(f"**#{f['number']}** {safe_name}")
+        lines.append(f"   Tamanio: {f['size_mb']:.1f} MB")
+        lines.append(f"   Enlace: {f['url']}")
+        lines.append("")   # línea en blanco entre archivos
+
+    lines.append("Comandos: /delete N  |  /rename N nombre")
+    return "\n".join(lines)
 
 
-def _split_text(text: str, limit: int = 4096) -> list:
+def _split_text(text: str, limit: int = 4000) -> list:
     chunks, current = [], ""
     for line in text.splitlines(keepends=True):
         if len(current) + len(line) > limit:
@@ -185,7 +255,7 @@ def _split_text(text: str, limit: int = 4096) -> list:
             current += line
     if current:
         chunks.append(current)
-    return chunks
+    return chunks or [text]
 
 
 # ─────────────────────────────────────────────
@@ -212,31 +282,30 @@ async def cd_command(client: Client, message: Message):
 
     if len(args) == 1:
         folder = session["current_folder"]
+        count = len(file_service.list_user_files(user_id, folder))
         await message.reply_text(
-            f"📂 Estás en **`{folder}`**. ¿Qué deseas hacer?",
-            reply_markup=kb_folder_actions(folder),
+            f"📂 Estas en **{_folder_label(folder)}**\n"
+            f"Tienes **{count}** archivo(s) aqui.",
+            reply_markup=kb_folder(folder),
         )
         return
 
     folder = args[1].lower()
     if folder not in ("downloads", "packed"):
         await message.reply_text(
-            "❌ **Carpeta inválida.**\n\n"
-            "Opciones disponibles:\n"
-            "• `downloads` — archivos recibidos\n"
-            "• `packed` — archivos comprimidos\n\n"
-            "**Ejemplo:** `/cd downloads`",
+            "❌ **Carpeta invalida.**\n\n"
+            "Opciones: downloads  |  packed\n"
+            "Ejemplo: /cd downloads",
             reply_markup=kb_main_menu(),
         )
         return
 
     session["current_folder"] = folder
     count = len(file_service.list_user_files(user_id, folder))
-    label = _folder_label(folder)
     await message.reply_text(
-        f"📂 Ahora estás en **{label}**.\n"
-        f"Tienes **{count}** archivo(s) aquí.",
-        reply_markup=kb_folder_actions(folder),
+        f"📂 Ahora estas en **{_folder_label(folder)}**\n"
+        f"Tienes **{count}** archivo(s) aqui.",
+        reply_markup=kb_folder(folder),
     )
 
 
@@ -253,24 +322,20 @@ async def list_command(client: Client, message: Message):
     files = file_service.list_user_files(user_id, folder)
     if not files:
         await message.reply_text(
-            f"📭 **{_folder_label(folder)}** está vacía.\n\n"
-            "Envía archivos al bot para guardarlos.",
+            f"📭 **{_folder_label(folder)}** esta vacia.\n\n"
+            "Envia archivos al bot para guardarlos.",
             reply_markup=kb_main_menu(),
         )
         return
 
-    per_page = 10
-    total_pages = max(1, (len(files) + per_page - 1) // per_page)
+    total_pages = max(1, (len(files) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
     page = min(page, total_pages)
     text = _build_list(files, folder, page, total_pages)
 
-    if len(text) > 4096:
-        for i, chunk in enumerate(_split_text(text)):
-            kb = kb_list_nav(page, total_pages) if i == len(_split_text(text)) - 1 else None
-            await message.reply_text(chunk, reply_markup=kb, disable_web_page_preview=True)
-    else:
-        await message.reply_text(text, reply_markup=kb_list_nav(page, total_pages),
-                                  disable_web_page_preview=True)
+    chunks = _split_text(text)
+    for i, chunk in enumerate(chunks):
+        kb = kb_list_nav(page, total_pages) if i == len(chunks) - 1 else None
+        await message.reply_text(chunk, reply_markup=kb, disable_web_page_preview=True)
 
 
 async def delete_command(client: Client, message: Message):
@@ -280,9 +345,8 @@ async def delete_command(client: Client, message: Message):
 
     if len(args) < 2:
         await message.reply_text(
-            "❌ **Faltan argumentos.**\n\n"
-            "**Uso:** `/delete <número>`\n**Ejemplo:** `/delete 5`\n\n"
-            "Usa `/list` para ver los números.",
+            "❌ **Uso:** /delete N\n**Ejemplo:** /delete 5\n\n"
+            "Usa /list para ver los numeros.",
             reply_markup=kb_back(),
         )
         return
@@ -290,23 +354,24 @@ async def delete_command(client: Client, message: Message):
     try:
         num = int(args[1])
     except ValueError:
-        await message.reply_text("❌ El número debe ser un entero válido.")
+        await message.reply_text("❌ El numero debe ser un entero valido.")
         return
 
     files = file_service.list_user_files(user_id, folder)
     target = next((f for f in files if f["number"] == num), None)
     if not target:
         await message.reply_text(
-            f"❌ No existe el archivo **#{num}** en `{folder}`.",
+            f"❌ No existe el archivo #{num} en {folder}.",
             reply_markup=kb_back(),
         )
         return
 
+    safe_name = target["name"].replace("*", "").replace("_", " ")
     await message.reply_text(
-        f"⚠️ **¿Eliminar este archivo?**\n\n"
-        f"**#{target['number']}** — `{target['name']}`\n"
-        f"📏 {target['size_mb']:.1f} MB\n\n"
-        "Esta acción **no se puede deshacer**.",
+        f"⚠️ **Eliminar este archivo?**\n\n"
+        f"#{target['number']} — {safe_name}\n"
+        f"Tamanio: {target['size_mb']:.1f} MB\n\n"
+        "Esta accion no se puede deshacer.",
         reply_markup=kb_confirm_delete(num, folder),
     )
 
@@ -318,15 +383,15 @@ async def clear_command(client: Client, message: Message):
 
     if count == 0:
         await message.reply_text(
-            f"📭 **{_folder_label(folder)}** ya está vacía.",
+            f"📭 **{_folder_label(folder)}** ya esta vacia.",
             reply_markup=kb_main_menu(),
         )
         return
 
     await message.reply_text(
-        f"⚠️ **¿Vaciar {_folder_label(folder)}?**\n\n"
-        f"Se eliminarán **{count}** archivo(s) permanentemente.\n"
-        "Esta acción **no se puede deshacer**.",
+        f"⚠️ **Vaciar {_folder_label(folder)}?**\n\n"
+        f"Se eliminaran **{count}** archivo(s) de forma permanente.\n"
+        "Esta accion no se puede deshacer.",
         reply_markup=kb_confirm_clear(folder),
     )
 
@@ -338,9 +403,8 @@ async def rename_command(client: Client, message: Message):
 
     if len(args) < 3:
         await message.reply_text(
-            "❌ **Faltan argumentos.**\n\n"
-            "**Uso:** `/rename <número> <nuevo_nombre>`\n"
-            "**Ejemplo:** `/rename 3 informe_final`",
+            "❌ **Uso:** /rename N nuevo_nombre\n"
+            "**Ejemplo:** /rename 3 informe_final",
             reply_markup=kb_back(),
         )
         return
@@ -348,21 +412,22 @@ async def rename_command(client: Client, message: Message):
     try:
         num = int(args[1])
     except ValueError:
-        await message.reply_text("❌ El número debe ser un entero válido.")
+        await message.reply_text("❌ El numero debe ser un entero valido.")
         return
 
     new_name = args[2].strip()
     if not new_name:
-        await message.reply_text("❌ El nuevo nombre no puede estar vacío.")
+        await message.reply_text("❌ El nuevo nombre no puede estar vacio.")
         return
 
     success, msg, new_url = file_service.rename_file(user_id, num, new_name, folder)
     if success:
+        safe_name = new_name.replace("*", "").replace("_", " ")
         await message.reply_text(
             f"✅ **Archivo renombrado.**\n\n"
-            f"**Nombre:** `{new_name}`\n"
-            f"🔗 [Nuevo enlace]({new_url})",
-            reply_markup=kb_back(),
+            f"Nombre: {safe_name}\n"
+            f"Enlace: {new_url}",
+            reply_markup=kb_after_rename(),
             disable_web_page_preview=True,
         )
     else:
@@ -372,8 +437,7 @@ async def rename_command(client: Client, message: Message):
 async def status_command(client: Client, message: Message):
     user_id = message.from_user.id
     session = get_session(user_id)
-    text = _build_status_text(user_id, session)
-    await message.reply_text(text, reply_markup=kb_main_menu())
+    await message.reply_text(_build_status(user_id, session), reply_markup=kb_main_menu())
 
 
 async def pack_command(client: Client, message: Message):
@@ -383,10 +447,10 @@ async def pack_command(client: Client, message: Message):
     sys_st = load_manager.get_status()
     if not sys_st["can_accept_work"]:
         await message.reply_text(
-            "⚠️ **El servidor está sobrecargado.**\n\n"
-            f"CPU: `{sys_st['cpu_percent']:.1f}%`  |  "
-            f"Procesos: `{sys_st['active_processes']}`\n\n"
-            "Inténtalo de nuevo en unos minutos.",
+            "⚠️ **Servidor sobrecargado.**\n\n"
+            f"CPU: {sys_st['cpu_percent']:.1f}%  |  "
+            f"Procesos: {sys_st['active_processes']}\n\n"
+            "Intentalo de nuevo en unos minutos.",
             reply_markup=kb_main_menu(),
         )
         return
@@ -397,91 +461,21 @@ async def pack_command(client: Client, message: Message):
             split_size = int(parts[1])
             if not (1 <= split_size <= 500):
                 await message.reply_text(
-                    "❌ El tamaño de cada parte debe estar entre **1 y 500 MB**.\n"
-                    "**Ejemplo:** `/pack 100`"
+                    "❌ El tamanio de cada parte debe estar entre 1 y 500 MB.\n"
+                    "Ejemplo: /pack 100"
                 )
                 return
         except ValueError:
-            await message.reply_text(
-                "❌ Valor no válido.\n**Uso:** `/pack` o `/pack <MB>`"
-            )
+            await message.reply_text("❌ Valor invalido.\nUso: /pack  o  /pack MB")
             return
 
     status_msg = await message.reply_text(
-        "⏳ **Empaquetando…**\n"
-        f"{'Dividiendo en partes de ' + str(split_size) + ' MB…' if split_size else 'Creando archivo ZIP…'}"
+        "⏳ **Empaquetando...**\n"
+        + (f"Dividiendo en partes de {split_size} MB..." if split_size else "Creando archivo ZIP...")
     )
 
-    def _do_pack():
-        try:
-            return packing_service.pack_folder(user_id, split_size)
-        except Exception as e:
-            return None, str(e)
-
-    try:
-        with concurrent.futures.ThreadPoolExecutor() as ex:
-            files, err_msg = ex.submit(_do_pack).result(timeout=300)
-    except concurrent.futures.TimeoutError:
-        await status_msg.edit_text(
-            "❌ **Tiempo de espera agotado.**\n\n"
-            "El empaquetado tardó demasiado. Intenta con menos archivos."
-        )
-        return
-
-    if not files:
-        await status_msg.edit_text(f"❌ {err_msg}")
-        return
-
-    total_mb = sum(f["size_mb"] for f in files)
-    orig_label = f" ({files[0]['total_files']} archivos originales)" \
-        if files and files[0].get("total_files") else ""
-
-    if len(files) == 1:
-        f = files[0]
-        await status_msg.edit_text(
-            f"✅ **Empaquetado completado{orig_label}**\n\n"
-            f"**Archivo:** `{f['filename']}`\n"
-            f"**Tamaño:** {f['size_mb']:.1f} MB\n\n"
-            f"🔗 [{f['filename']}]({f['url']})\n\n"
-            "Usa `/cd packed` → `/list` para ver todos tus empaquetados.",
-            disable_web_page_preview=True,
-        )
-    else:
-        user_dir = file_service.get_user_directory(user_id, "packed")
-        base = next((f["filename"].rsplit(".", 2)[0] for f in files if ".001" in f["filename"]), None)
-        list_url = None
-        if base:
-            txt = f"{base}.txt"
-            if os.path.exists(os.path.join(user_dir, txt)):
-                list_url = file_service.create_packed_url(user_id, txt)
-
-        header = (
-            f"✅ **Empaquetado completado{orig_label}**\n\n"
-            f"**Partes:** {len(files)}  |  **Total:** {total_mb:.1f} MB\n\n"
-            "**🔗 Enlaces de descarga:**"
-        )
-        if list_url:
-            header += f"\n📑 [Lista de partes]({list_url})"
-
-        full = header + "".join(f"\n\n**{f['filename']}**\n{f['url']}" for f in files)
-        full += "\n\nUsa `/cd packed` → `/list` para ver todos tus empaquetados."
-
-        if len(full) > 4096:
-            await status_msg.edit_text(
-                f"✅ **{len(files)} partes generadas — {total_mb:.1f} MB total**"
-                + (f"\n📑 [Lista de partes]({list_url})" if list_url else ""),
-                disable_web_page_preview=True,
-            )
-            for i in range(0, len(files), 10):
-                chunk = "\n\n".join(
-                    f"**{f['filename']}**\n{f['url']}" for f in files[i:i + 10]
-                )
-                await message.reply_text(chunk, disable_web_page_preview=True)
-            await message.reply_text(f"✅ **Total: {len(files)} partes generadas.**", reply_markup=kb_back())
-        else:
-            await status_msg.edit_text(full, disable_web_page_preview=True)
-
-    logger.info(f"Pack completado para {user_id}: {len(files)} parte(s)")
+    result_text, result_kb = await _run_pack(user_id, split_size)
+    await status_msg.edit_text(result_text, reply_markup=result_kb, disable_web_page_preview=True)
 
 
 async def queue_command(client: Client, message: Message):
@@ -489,30 +483,26 @@ async def queue_command(client: Client, message: Message):
     queue = user_queues.get(user_id, [])
 
     if not queue:
-        await message.reply_text("📭 **Cola vacía.** No hay archivos pendientes.", reply_markup=kb_main_menu())
+        await message.reply_text("📭 **Cola vacia.** No hay archivos pendientes.", reply_markup=kb_main_menu())
         return
 
-    lines = []
+    lines = [f"📋 **Cola — {len(queue)} archivo(s)**\n"]
     for i, msg in enumerate(queue, 1):
         if msg.document:
-            label = f"📄 {msg.document.file_name or 'documento'}"
+            lbl = f"Documento: {msg.document.file_name or 'sin nombre'}"
         elif msg.video:
-            label = f"🎥 {msg.video.file_name or 'video'}"
+            lbl = f"Video: {msg.video.file_name or 'sin nombre'}"
         elif msg.audio:
-            label = f"🎵 {msg.audio.file_name or 'audio'}"
+            lbl = f"Audio: {msg.audio.file_name or 'sin nombre'}"
         elif msg.photo:
-            label = "🖼️ Foto"
+            lbl = "Foto"
         else:
-            label = "📎 Archivo"
-        lines.append(f"**#{i}** — {label}")
+            lbl = "Archivo"
+        lines.append(f"#{i} — {lbl}")
 
     processing = user_id in user_current_processing
-    await message.reply_text(
-        f"📋 **Cola — {len(queue)} archivo(s)**\n\n"
-        + "\n".join(lines)
-        + f"\n\n{'⚙️ Procesando el primero ahora mismo…' if processing else '⏸️ En espera.'}",
-        reply_markup=kb_main_menu(),
-    )
+    lines.append("\n" + ("Procesando el primero ahora mismo..." if processing else "En espera."))
+    await message.reply_text("\n".join(lines), reply_markup=kb_main_menu())
 
 
 async def clear_queue_command(client: Client, message: Message):
@@ -520,7 +510,7 @@ async def clear_queue_command(client: Client, message: Message):
     queue = user_queues.get(user_id, [])
 
     if not queue:
-        await message.reply_text("📭 La cola ya está vacía.", reply_markup=kb_main_menu())
+        await message.reply_text("📭 La cola ya esta vacia.", reply_markup=kb_main_menu())
         return
 
     count = len(queue)
@@ -528,23 +518,94 @@ async def clear_queue_command(client: Client, message: Message):
     user_current_processing.pop(user_id, None)
     user_batch_totals.pop(user_id, None)
     await message.reply_text(
-        f"🗑️ **Cola limpiada.** Se cancelaron **{count}** archivo(s).",
+        f"🗑 **Cola limpiada.** Se cancelaron **{count}** archivo(s).",
         reply_markup=kb_main_menu(),
     )
 
 
 async def cleanup_command(client: Client, message: Message):
-    status_msg = await message.reply_text("🧹 **Analizando almacenamiento…**")
+    status_msg = await message.reply_text("🧹 Analizando almacenamiento...")
     try:
-        size_mb = file_service.get_user_storage_usage(message.from_user.id) / (1024 * 1024)
+        mb = file_service.get_user_storage_usage(message.from_user.id) / (1024 * 1024)
         await status_msg.edit_text(
-            f"✅ **Análisis completado.**\n\n"
-            f"• Espacio ocupado: **{size_mb:.2f} MB**\n"
-            f"• Sistema: operativo"
+            f"✅ **Analisis completado.**\n\n"
+            f"Espacio ocupado: {mb:.2f} MB\nSistema: operativo"
         )
     except Exception as e:
         logger.error(f"Error en /cleanup: {e}")
-        await status_msg.edit_text("❌ Error durante el análisis.")
+        await status_msg.edit_text("❌ Error durante el analisis.")
+
+
+# ─────────────────────────────────────────────
+#  LÓGICA DE EMPAQUETADO COMPARTIDA
+# ─────────────────────────────────────────────
+
+async def _run_pack(user_id: int, split_size) -> tuple:
+    """Ejecuta el empaquetado y devuelve (texto_resultado, teclado)."""
+    def _do():
+        try:
+            return packing_service.pack_folder(user_id, split_size)
+        except Exception as e:
+            return None, str(e)
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            files, err_msg = ex.submit(_do).result(timeout=300)
+    except concurrent.futures.TimeoutError:
+        return (
+            "❌ **Tiempo de espera agotado.**\n\n"
+            "El empaquetado tardo demasiado. Intenta con menos archivos.",
+            kb_main_menu(),
+        )
+
+    if not files:
+        return f"❌ {err_msg}", kb_main_menu()
+
+    total_mb = sum(f["size_mb"] for f in files)
+    orig = f" ({files[0]['total_files']} archivos)" if files[0].get("total_files") else ""
+
+    if len(files) == 1:
+        f = files[0]
+        text = (
+            f"✅ **Empaquetado completado{orig}**\n\n"
+            f"Archivo: {f['filename']}\n"
+            f"Tamanio: {f['size_mb']:.1f} MB\n\n"
+            f"Enlace: {f['url']}"
+        )
+        return text, kb_after_pack()
+
+    # Buscar .txt de lista de partes
+    user_dir = file_service.get_user_directory(user_id, "packed")
+    base = next((f["filename"].rsplit(".", 2)[0] for f in files if ".001" in f["filename"]), None)
+    list_url = None
+    if base:
+        txt_path = os.path.join(user_dir, f"{base}.txt")
+        if os.path.exists(txt_path):
+            list_url = file_service.create_packed_url(user_id, f"{base}.txt")
+
+    lines = [
+        f"✅ **Empaquetado completado{orig}**\n",
+        f"Partes: {len(files)}  |  Total: {total_mb:.1f} MB\n",
+    ]
+    if list_url:
+        lines.append(f"Lista de partes: {list_url}\n")
+    lines.append("**Enlaces de descarga:**")
+    for f in files:
+        lines.append(f"\n{f['filename']}\n{f['url']}")
+
+    text = "\n".join(lines)
+
+    # Si es muy largo, truncar con nota
+    if len(text) > 4000:
+        short = (
+            f"✅ **{len(files)} partes generadas{orig}**\n"
+            f"Total: {total_mb:.1f} MB\n\n"
+            "Los enlaces estan en tu carpeta packed. Usa el boton de abajo para verlos."
+            + (f"\n\nLista de partes: {list_url}" if list_url else "")
+        )
+        return short, kb_after_pack()
+
+    return text, kb_after_pack()
 
 
 # ─────────────────────────────────────────────
@@ -557,25 +618,34 @@ async def callback_handler(client: Client, query: CallbackQuery):
     session = get_session(user_id)
 
     try:
-        if data == "main_menu":
+        # ── Sin accion ───────────────────────────
+        if data == "noop":
+            await query.answer()
+            return
+
+        # ── Menu principal ────────────────────────
+        elif data == "main_menu":
             await query.message.edit_text(
                 WELCOME_TEXT.format(name=query.from_user.first_name, limit=MAX_FILE_SIZE_MB),
                 reply_markup=kb_main_menu(),
             )
 
+        # ── Ayuda ─────────────────────────────────
         elif data == "help":
             await query.message.edit_text(HELP_TEXT, reply_markup=kb_back())
 
+        # ── Cambio de carpeta ─────────────────────
         elif data.startswith("cd:"):
             folder = data[3:]
             session["current_folder"] = folder
             count = len(file_service.list_user_files(user_id, folder))
             await query.message.edit_text(
-                f"📂 Ahora estás en **{_folder_label(folder)}**.\n"
-                f"Tienes **{count}** archivo(s) aquí.",
-                reply_markup=kb_folder_actions(folder),
+                f"📂 **{_folder_label(folder)}**\n"
+                f"Tienes {count} archivo(s) aqui.",
+                reply_markup=kb_folder(folder),
             )
 
+        # ── Listado paginado ──────────────────────
         elif data.startswith("list:"):
             page = int(data[5:])
             folder = session["current_folder"]
@@ -583,14 +653,13 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
             if not files:
                 await query.message.edit_text(
-                    f"📭 **{_folder_label(folder)}** está vacía.",
+                    f"📭 **{_folder_label(folder)}** esta vacia.",
                     reply_markup=kb_main_menu(),
                 )
                 await query.answer()
                 return
 
-            per_page = 10
-            total_pages = max(1, (len(files) + per_page - 1) // per_page)
+            total_pages = max(1, (len(files) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
             page = max(1, min(page, total_pages))
             text = _build_list(files, folder, page, total_pages)
             await query.message.edit_text(
@@ -599,55 +668,62 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 disable_web_page_preview=True,
             )
 
+        # ── Estado ────────────────────────────────
         elif data == "status":
             await query.message.edit_text(
-                _build_status_text(user_id, session),
+                _build_status(user_id, session),
                 reply_markup=kb_main_menu(),
             )
 
+        # ── Confirmacion vaciado ──────────────────
         elif data.startswith("clear_confirm:"):
             folder = data[14:]
             count = len(file_service.list_user_files(user_id, folder))
             if count == 0:
                 await query.message.edit_text(
-                    f"📭 **{_folder_label(folder)}** ya está vacía.",
+                    f"📭 **{_folder_label(folder)}** ya esta vacia.",
                     reply_markup=kb_main_menu(),
                 )
             else:
                 await query.message.edit_text(
-                    f"⚠️ **¿Vaciar {_folder_label(folder)}?**\n\n"
-                    f"Se eliminarán **{count}** archivo(s) de forma permanente.\n"
-                    "Esta acción **no se puede deshacer**.",
+                    f"⚠️ **Vaciar {_folder_label(folder)}?**\n\n"
+                    f"Se eliminaran {count} archivo(s) de forma permanente.\n"
+                    "Esta accion no se puede deshacer.",
                     reply_markup=kb_confirm_clear(folder),
                 )
 
+        # ── Ejecutar vaciado ──────────────────────
         elif data.startswith("clear_do:"):
             folder = data[9:]
             success, msg = file_service.delete_all_files(user_id, folder)
             icon = "✅" if success else "❌"
             await query.message.edit_text(
                 f"{icon} {msg}",
-                reply_markup=kb_folder_actions(folder),
+                reply_markup=kb_folder(folder),
             )
 
+        # ── Ejecutar eliminacion ──────────────────
         elif data.startswith("delete_do:"):
             _, num_str, folder = data.split(":", 2)
             success, msg = file_service.delete_file_by_number(user_id, int(num_str), folder)
             icon = "✅" if success else "❌"
             await query.message.edit_text(f"{icon} {msg}", reply_markup=kb_back())
 
+        # ── Empaquetar desde boton ────────────────
         elif data == "pack":
             sys_st = load_manager.get_status()
             if not sys_st["can_accept_work"]:
-                await query.answer("⚠️ Servidor sobrecargado. Intenta más tarde.", show_alert=True)
+                await query.answer("Servidor sobrecargado. Intenta mas tarde.", show_alert=True)
                 return
-            await query.answer("⏳ Iniciando empaquetado…")
-            await query.message.reply_text("⏳ **Empaquetando…** Creando archivo ZIP…")
-            asyncio.create_task(_pack_task(query.message, user_id))
+            await query.answer("Iniciando empaquetado...")
+            wait_msg = await query.message.reply_text("⏳ **Empaquetando...** Creando archivo ZIP...")
+            result_text, result_kb = await _run_pack(user_id, None)
+            await wait_msg.edit_text(result_text, reply_markup=result_kb, disable_web_page_preview=True)
+            await query.answer()
             return
 
         else:
-            await query.answer("Acción no reconocida.", show_alert=True)
+            await query.answer("Accion no reconocida.", show_alert=True)
             return
 
         await query.answer()
@@ -655,67 +731,13 @@ async def callback_handler(client: Client, query: CallbackQuery):
     except Exception as e:
         logger.error(f"Error callback '{data}': {e}", exc_info=True)
         try:
-            await query.answer("❌ Ocurrió un error. Intenta de nuevo.", show_alert=True)
+            await query.answer("Ocurrio un error. Intenta de nuevo.", show_alert=True)
         except Exception:
             pass
 
 
-async def _pack_task(reply_to: Message, user_id: int):
-    def _do():
-        try:
-            return packing_service.pack_folder(user_id, None)
-        except Exception as e:
-            return None, str(e)
-
-    with concurrent.futures.ThreadPoolExecutor() as ex:
-        files, err = ex.submit(_do).result(timeout=300)
-
-    if not files:
-        await reply_to.reply_text(f"❌ {err}")
-        return
-
-    if len(files) == 1:
-        f = files[0]
-        await reply_to.reply_text(
-            f"✅ **Empaquetado completado.**\n\n"
-            f"**Archivo:** `{f['filename']}`\n"
-            f"**Tamaño:** {f['size_mb']:.1f} MB\n\n"
-            f"🔗 [{f['filename']}]({f['url']})",
-            disable_web_page_preview=True,
-        )
-    else:
-        total_mb = sum(f["size_mb"] for f in files)
-        lines = "\n".join(f"🔗 [{f['filename']}]({f['url']})" for f in files)
-        await reply_to.reply_text(
-            f"✅ **{len(files)} partes — {total_mb:.1f} MB total**\n\n{lines}",
-            disable_web_page_preview=True,
-        )
-
-
-def _build_status_text(user_id: int, session: dict) -> str:
-    dl = len(file_service.list_user_files(user_id, "downloads"))
-    pk = len(file_service.list_user_files(user_id, "packed"))
-    mb = file_service.get_user_storage_usage(user_id) / (1024 * 1024)
-    s = load_manager.get_status()
-    icon = "🟢" if s["can_accept_work"] else "🔴"
-    return (
-        f"📊 **Estado del sistema**\n\n"
-        f"**👤 Tu cuenta:**\n"
-        f"  • ID: `{user_id}`\n"
-        f"  • Carpeta activa: `{session['current_folder']}`\n"
-        f"  • Archivos downloads: **{dl}**\n"
-        f"  • Archivos packed: **{pk}**\n"
-        f"  • Espacio usado: **{mb:.2f} MB**\n\n"
-        f"**🖥️ Servidor:**\n"
-        f"  • CPU: **{s['cpu_percent']:.1f}%**\n"
-        f"  • Memoria: **{s['memory_percent']:.1f}%**\n"
-        f"  • Procesos: **{s['active_processes']}/{s['max_processes']}**\n"
-        f"  • Estado: {icon} {'Operativo' if s['can_accept_work'] else 'Sobrecargado'}"
-    )
-
-
 # ─────────────────────────────────────────────
-#  RECEPCIÓN DE ARCHIVOS
+#  RECEPCION DE ARCHIVOS
 # ─────────────────────────────────────────────
 
 async def handle_file(client: Client, message: Message):
@@ -734,9 +756,9 @@ async def handle_file(client: Client, message: Message):
     if file_size > MAX_FILE_SIZE:
         await message.reply_text(
             f"❌ **Archivo demasiado grande.**\n\n"
-            f"• Tu archivo: **{file_service.format_bytes(file_size)}**\n"
-            f"• Límite permitido: **{MAX_FILE_SIZE_MB} MB**\n\n"
-            "Divide el archivo en partes más pequeñas e inténtalo de nuevo."
+            f"Tu archivo: {file_service.format_bytes(file_size)}\n"
+            f"Limite permitido: {MAX_FILE_SIZE_MB} MB\n\n"
+            "Divide el archivo en partes mas pequenas e intentalo de nuevo."
         )
         return
 
@@ -750,8 +772,8 @@ async def handle_file(client: Client, message: Message):
         await process_file_queue(client, user_id)
     else:
         await message.reply_text(
-            f"📬 **Añadido a la cola.**\n"
-            f"Posición: **#{pos}** — espera tu turno…"
+            f"📬 **Anadido a la cola.**\n"
+            f"Posicion: #{pos} — espera tu turno..."
         )
 
 
@@ -777,19 +799,23 @@ async def process_single_file(client, message, user_id, position, total):
     try:
         if message.document:
             file_obj = message.document
-            file_type, orig_name = "Documento", message.document.file_name or "archivo"
+            file_type = "Documento"
+            orig_name = message.document.file_name or "archivo"
             file_size = file_obj.file_size or 0
         elif message.video:
             file_obj = message.video
-            file_type, orig_name = "Video", message.video.file_name or "video.mp4"
+            file_type = "Video"
+            orig_name = message.video.file_name or "video.mp4"
             file_size = file_obj.file_size or 0
         elif message.audio:
             file_obj = message.audio
-            file_type, orig_name = "Audio", message.audio.file_name or "audio.mp3"
+            file_type = "Audio"
+            orig_name = message.audio.file_name or "audio.mp3"
             file_size = file_obj.file_size or 0
         elif message.photo:
             file_obj = message.photo[-1]
-            file_type, orig_name = "Foto", f"foto_{message.id}.jpg"
+            file_type = "Foto"
+            orig_name = f"foto_{message.id}.jpg"
             file_size = file_obj.file_size or 0
         else:
             user_queues[user_id].pop(0)
@@ -846,14 +872,15 @@ async def process_single_file(client, message, user_id, position, total):
         if not success or not os.path.exists(path):
             await prog_msg.edit_text(
                 "❌ **Error al descargar el archivo.**\n\n"
-                "El archivo no se guardó. Inténtalo de nuevo."
+                "El archivo no se guardo. Intentalo de nuevo.",
+                reply_markup=kb_main_menu(),
             )
             user_queues[user_id].pop(0)
             return
 
         final_size = os.path.getsize(path)
         if file_size > 0 and final_size < file_size * 0.95:
-            logger.warning(f"Descarga posiblemente incompleta: {file_size}B → {final_size}B")
+            logger.warning(f"Descarga posiblemente incompleta: {file_size}B -> {final_size}B")
 
         size_mb = final_size / (1024 * 1024)
         url = file_service.create_download_url(user_id, stored)
@@ -863,14 +890,19 @@ async def process_single_file(client, message, user_id, position, total):
         )
 
         remaining = len(user_queues[user_id]) - 1
-        queue_note = f"\n\n⏭️ Procesando siguiente… ({remaining} en cola)" if remaining > 0 else ""
+        queue_note = f"\n\nSiguiente en cola: {remaining} archivo(s) restante(s)..." if remaining > 0 else ""
+
+        # Nombre seguro para el mensaje (sin markdown que rompa entidades)
+        safe_name = orig_name.replace("*", "").replace("_", " ").replace("`", "")
 
         await prog_msg.edit_text(
             f"✅ **Archivo guardado — #{final_num}**\n\n"
-            f"**Nombre:** `{orig_name}`\n"
-            f"**Tipo:** {file_type}  ·  **Tamaño:** {size_mb:.2f} MB\n\n"
-            f"🔗 [{orig_name}]({url})\n"
-            f"📂 Carpeta: `downloads`{queue_note}",
+            f"Nombre: {safe_name}\n"
+            f"Tipo: {file_type}  |  Tamanio: {size_mb:.2f} MB\n\n"
+            f"Enlace: {url}\n"
+            f"Carpeta: downloads"
+            f"{queue_note}",
+            reply_markup=kb_after_upload(),
             disable_web_page_preview=True,
         )
 
@@ -879,7 +911,8 @@ async def process_single_file(client, message, user_id, position, total):
         try:
             await message.reply_text(
                 "❌ **Error inesperado al procesar el archivo.**\n\n"
-                "Si el problema persiste, contacta al administrador."
+                "Si el problema persiste, contacta al administrador.",
+                reply_markup=kb_main_menu(),
             )
         except Exception:
             pass
