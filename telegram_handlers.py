@@ -165,12 +165,14 @@ ITEMS_PER_PAGE = 10
 
 WELCOME_TEXT = (
     "👋 **Hola, {name}!** Bienvenido a **File2Link Bot**.\n\n"
-    "Guardo tus archivos y genero enlaces de descarga directa.\n\n"
+    "**¿Cómo funciona?**\n"
+    "Simplemente **reenvíame cualquier archivo** (documento, vídeo, audio o foto) "
+    "y yo lo guardaré, generando al instante un enlace de descarga directa.\n\n"
     "**Carpetas:**\n"
-    "  downloads — archivos recibidos\n"
-    "  packed — archivos comprimidos (ZIP)\n\n"
-    "**Limite por archivo:** {limit} MB\n\n"
-    "Elige una opcion 👇"
+    "  • `downloads` — archivos recibidos\n"
+    "  • `packed` — archivos comprimidos (ZIP)\n\n"
+    "**Límite por archivo:** {limit} MB\n\n"
+    "Elige una opción 👇"
 )
 
 HELP_TEXT = (
