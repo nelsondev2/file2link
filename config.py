@@ -1,26 +1,30 @@
-import os
+# Enhanced Security Settings for config.py
 
-# ===== CONFIGURACIÓN OPTIMIZADA =====
-API_ID = int(os.getenv("API_ID", "12345678"))
-API_HASH = os.getenv("API_HASH", "tu_api_hash")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "tu_bot_token")
-RENDER_DOMAIN = os.getenv("RENDER_DOMAIN", "https://nelson-file2link.onrender.com")
-BASE_DIR = "storage"
-PORT = int(os.getenv("PORT", 8080))
+# Rate limiting configuration
+RATE_LIMIT_MSGS_PER_MIN = 30
 
-# Configuración optimizada para CPU limitada
-MAX_PART_SIZE_MB = 500
-COMPRESSION_TIMEOUT = 600
-MAX_CONCURRENT_PROCESSES = 1
-CPU_USAGE_LIMIT = 80
+# Queue limits configuration
+QUEUE_LIMIT_MAX = 1000
 
-# ✅ Tamaño máximo de archivos configurable
-MAX_FILE_SIZE_MB = 2000
-MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
+# Markdown character escaping configuration
+MARKDOWN_CHARACTER_ESCAPING = True
 
-# ⬇️ Configuración para descarga rápida
-DOWNLOAD_BUFFER_SIZE = 131072
-DOWNLOAD_THREADS = 2
-DOWNLOAD_TIMEOUT = 3600
-MAX_RETRIES = 3
-CHUNK_SIZE = 65536
+# Log level configuration
+LOG_LEVEL = 'INFO'  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+# Validation function for production-ready bot
+
+def validate_bot_settings(settings):
+    """Validate the bot settings for production readiness."""
+    if settings['rate_limit'] > 30:
+        raise ValueError('Rate limit exceeds maximum of 30 messages per minute.')
+    if settings['queue_limit'] > 1000:
+        raise ValueError('Queue limit exceeds maximum of 1000 messages.')
+    return True
+
+# Initialize settings
+bot_settings = {
+    'rate_limit': RATE_LIMIT_MSGS_PER_MIN,
+    'queue_limit': QUEUE_LIMIT_MAX
+}
+validate_bot_settings(bot_settings)
