@@ -47,14 +47,59 @@ class FileService:
         return next_num
     
     def sanitize_filename(self, filename):
-        """Limpia el nombre de archivo para que sea URL-safe"""
-        invalid_chars = '<>:"/\\|?*'
-        for char in invalid_chars:
-            filename = filename.replace(char, '_')
-        if len(filename) > 100:
-            name, ext = os.path.splitext(filename)
-            filename = name[:100-len(ext)] + ext
-        return filename
+        """
+        Limpia el nombre de archivo para que sea seguro en disco Y en URL.
+
+        Reglas:
+        - Transliterar caracteres acentuados comunes al equivalente ASCII.
+        - Reemplazar espacios y caracteres conflictivos por '_'.
+        - Eliminar cualquier carácter que no sea alfanumérico, punto, guion o guion bajo.
+        - Colapsar múltiples '_' consecutivos en uno solo.
+        - Limitar la longitud total a 100 caracteres (sin contar la extensión).
+        - Nunca devolver un nombre vacío.
+        """
+        import unicodedata
+        import re
+
+        # 1. Normalizar Unicode → descomponer letras + diacríticos (NFD)
+        filename = unicodedata.normalize("NFD", filename)
+        # 2. Eliminar los diacríticos (categoría Mn = Mark, Nonspacing)
+        filename = "".join(c for c in filename if unicodedata.category(c) != "Mn")
+        # 3. Volver a ASCII puro, ignorando lo que no se pueda convertir
+        filename = filename.encode("ascii", "ignore").decode("ascii")
+
+        # 4. Separar nombre y extensión antes de limpiar
+        name, ext = os.path.splitext(filename)
+        # Limpiar también la extensión (por si lleva caracteres raros)
+        ext = re.sub(r"[^\w.]", "", ext)
+
+        # 5. Reemplazar caracteres conflictivos en el nombre por '_'
+        #    Conservamos: letras, dígitos, punto, guion, guion bajo
+        name = re.sub(r"[^\w.\-]", "_", name)
+
+        # 6. Colapsar guiones bajos múltiples
+        name = re.sub(r"_+", "_", name)
+
+        # 7. Eliminar guiones bajos al inicio/final del nombre
+        name = name.strip("_").strip(".")
+
+        # 8. Fallback si el nombre quedó vacío
+        if not name:
+            name = "archivo"
+
+        # 9. Truncar si excede 100 caracteres
+        if len(name) > 100:
+            name = name[:100]
+
+        return name + ext
+
+    def filename_to_url(self, stored_filename: str) -> str:
+        """
+        Convierte el nombre de archivo almacenado (ya sanitizado) a su
+        segmento de URL codificado. Usa safe='' para encodear TODO,
+        incluidos espacios residuales y símbolos.
+        """
+        return urllib.parse.quote(stored_filename, safe="")
 
     def format_bytes(self, size):
         """Formatea bytes a formato legible"""
@@ -64,17 +109,17 @@ class FileService:
             size /= 1024.0
         return f"{size:.1f} TB"
 
+    def filename_to_url(self, stored_filename):
+        """Codifica el nombre ya sanitizado para uso seguro en URL."""
+        return urllib.parse.quote(stored_filename, safe="")
+
     def create_download_url(self, user_id, filename):
-        """Crea una URL de descarga válida"""
-        safe_filename = self.sanitize_filename(filename)
-        encoded_filename = urllib.parse.quote(safe_filename)
-        return f"{RENDER_DOMAIN}/storage/{user_id}/downloads/{encoded_filename}"  # ⬅️ CAMBIADO: static → storage
+        """Crea una URL de descarga. filename debe ser el nombre almacenado (ya sanitizado)."""
+        return f"{RENDER_DOMAIN}/storage/{user_id}/downloads/{self.filename_to_url(filename)}"
 
     def create_packed_url(self, user_id, filename):
-        """Crea una URL para archivos empaquetados"""
-        safe_filename = self.sanitize_filename(filename)
-        encoded_filename = urllib.parse.quote(safe_filename)
-        return f"{RENDER_DOMAIN}/storage/{user_id}/packed/{encoded_filename}"  # ⬅️ CAMBIADO: static → storage
+        """Crea una URL para empaquetados. filename debe ser el nombre almacenado (ya sanitizado)."""
+        return f"{RENDER_DOMAIN}/storage/{user_id}/packed/{self.filename_to_url(filename)}"
 
     def get_user_directory(self, user_id, file_type="downloads"):
         """Obtiene el directorio del usuario"""
