@@ -42,7 +42,7 @@ def get_session(user_id: int) -> dict:
 
 def _esc(text: str) -> str:
     """Escapa caracteres especiales de Markdown v1 en texto plano."""
-    for ch in ("_", "*", "`", "["):
+    for ch in ("_", "*", "`", "[", "]"):
         text = text.replace(ch, f"\\{ch}")
     return text
 
@@ -223,8 +223,7 @@ def _build_status(user_id: int, session: dict) -> str:
 
 def _build_list(files: list, folder: str, page: int, total_pages: int) -> str:
     """
-    Construye el mensaje de listado sin markdown complejo para evitar
-    ENTITY_BOUNDS_INVALID. Solo usa **negrita** y enlaces planos.
+    Construye el mensaje de listado con enlaces en formato Markdown [nombre](url).
     """
     label = _folder_label(folder)
     lines = [
@@ -234,11 +233,10 @@ def _build_list(files: list, folder: str, page: int, total_pages: int) -> str:
 
     start = (page - 1) * ITEMS_PER_PAGE
     for f in files[start: start + ITEMS_PER_PAGE]:
-        # Nombre sin caracteres markdown problemáticos
-        safe_name = f["name"].replace("*", "").replace("_", " ").replace("`", "")
-        lines.append(f"**#{f['number']}** {safe_name}")
+        # Escapar nombre para usarlo dentro del enlace Markdown
+        safe_name = _esc(f["name"])
+        lines.append(f"**#{f['number']}** [{safe_name}]({f['url']})")
         lines.append(f"   Tamanio: {f['size_mb']:.1f} MB")
-        lines.append(f"   Enlace: {f['url']}")
         lines.append("")   # línea en blanco entre archivos
 
     lines.append("Comandos: /delete N  |  /rename N nombre")
@@ -422,11 +420,10 @@ async def rename_command(client: Client, message: Message):
 
     success, msg, new_url = file_service.rename_file(user_id, num, new_name, folder)
     if success:
-        safe_name = new_name.replace("*", "").replace("_", " ")
+        safe_name = _esc(new_name)
         await message.reply_text(
             f"✅ **Archivo renombrado.**\n\n"
-            f"Nombre: {safe_name}\n"
-            f"Enlace: {new_url}",
+            f"[{safe_name}]({new_url})",
             reply_markup=kb_after_rename(),
             disable_web_page_preview=True,
         )
@@ -566,11 +563,11 @@ async def _run_pack(user_id: int, split_size) -> tuple:
 
     if len(files) == 1:
         f = files[0]
+        safe_name = _esc(f['filename'])
         text = (
             f"✅ **Empaquetado completado{orig}**\n\n"
-            f"Archivo: {f['filename']}\n"
-            f"Tamanio: {f['size_mb']:.1f} MB\n\n"
-            f"Enlace: {f['url']}"
+            f"[{safe_name}]({f['url']})\n"
+            f"Tamanio: {f['size_mb']:.1f} MB"
         )
         return text, kb_after_pack()
 
@@ -588,10 +585,11 @@ async def _run_pack(user_id: int, split_size) -> tuple:
         f"Partes: {len(files)}  |  Total: {total_mb:.1f} MB\n",
     ]
     if list_url:
-        lines.append(f"Lista de partes: {list_url}\n")
+        lines.append(f"Lista de partes: [{_esc(f'{base}.txt')}]({list_url})\n")
     lines.append("**Enlaces de descarga:**")
     for f in files:
-        lines.append(f"\n{f['filename']}\n{f['url']}")
+        safe_name = _esc(f['filename'])
+        lines.append(f"\n[{safe_name}]({f['url']})")
 
     text = "\n".join(lines)
 
@@ -601,7 +599,7 @@ async def _run_pack(user_id: int, split_size) -> tuple:
             f"✅ **{len(files)} partes generadas{orig}**\n"
             f"Total: {total_mb:.1f} MB\n\n"
             "Los enlaces estan en tu carpeta packed. Usa el boton de abajo para verlos."
-            + (f"\n\nLista de partes: {list_url}" if list_url else "")
+            + (f"\n\nLista de partes: [{_esc(f'{base}.txt')}]({list_url})" if list_url else "")
         )
         return short, kb_after_pack()
 
@@ -892,14 +890,12 @@ async def process_single_file(client, message, user_id, position, total):
         remaining = len(user_queues[user_id]) - 1
         queue_note = f"\n\nSiguiente en cola: {remaining} archivo(s) restante(s)..." if remaining > 0 else ""
 
-        # Nombre seguro para el mensaje (sin markdown que rompa entidades)
-        safe_name = orig_name.replace("*", "").replace("_", " ").replace("`", "")
+        safe_name = _esc(orig_name)
 
         await prog_msg.edit_text(
             f"✅ **Archivo guardado — #{final_num}**\n\n"
-            f"Nombre: {safe_name}\n"
+            f"[{safe_name}]({url})\n"
             f"Tipo: {file_type}  |  Tamanio: {size_mb:.2f} MB\n\n"
-            f"Enlace: {url}\n"
             f"Carpeta: downloads"
             f"{queue_note}",
             reply_markup=kb_after_upload(),
