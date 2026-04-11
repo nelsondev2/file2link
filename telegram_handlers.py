@@ -199,6 +199,17 @@ def _folder_label(folder: str) -> str:
     return "Descargas" if folder == "downloads" else "Empaquetados"
 
 
+def _link(name: str, url: str) -> str:
+    """
+    Enlace Markdown [nombre](url) seguro para Telegram.
+    Solo hay que escapar ] dentro del texto del enlace.
+    Emojis y tildes en el texto son seguros; el problema anterior era
+    emojis multi-byte mezclados con otros formatos en el mismo mensaje.
+    """
+    safe_name = name.replace("]", "\\]")
+    return f"[{safe_name}]({url})"
+
+
 def _build_status(user_id: int, session: dict) -> str:
     dl = len(file_service.list_user_files(user_id, "downloads"))
     pk = len(file_service.list_user_files(user_id, "packed"))
@@ -234,11 +245,8 @@ def _build_list(files: list, folder: str, page: int, total_pages: int) -> str:
 
     start = (page - 1) * ITEMS_PER_PAGE
     for f in files[start: start + ITEMS_PER_PAGE]:
-        # Nombre sin caracteres markdown problemáticos
-        safe_name = f["name"].replace("*", "").replace("_", " ").replace("`", "")
-        lines.append(f"**#{f['number']}** {safe_name}")
-        lines.append(f"   Tamanio: {f['size_mb']:.1f} MB")
-        lines.append(f"   Enlace: {f['url']}")
+        lines.append(f"**#{f['number']}** {_link(f['name'], f['url'])}")
+        lines.append(f"   {f['size_mb']:.1f} MB")
         lines.append("")   # línea en blanco entre archivos
 
     lines.append("Comandos: /delete N  |  /rename N nombre")
@@ -422,13 +430,11 @@ async def rename_command(client: Client, message: Message):
 
     success, msg, new_url = file_service.rename_file(user_id, num, new_name, folder)
     if success:
-        safe_name = new_name.replace("*", "").replace("_", " ")
         await message.reply_text(
             f"✅ **Archivo renombrado.**\n\n"
-            f"Nombre: {safe_name}\n"
-            f"Enlace: {new_url}",
+            f"{_link(new_name, new_url)}",
             reply_markup=kb_after_rename(),
-            disable_web_page_preview=True,
+            disable_web_page_preview=False,
         )
     else:
         await message.reply_text(f"❌ {msg}", reply_markup=kb_back())
@@ -568,9 +574,8 @@ async def _run_pack(user_id: int, split_size) -> tuple:
         f = files[0]
         text = (
             f"✅ **Empaquetado completado{orig}**\n\n"
-            f"Archivo: {f['filename']}\n"
-            f"Tamanio: {f['size_mb']:.1f} MB\n\n"
-            f"Enlace: {f['url']}"
+            f"{_link(f['filename'], f['url'])}\n"
+            f"{f['size_mb']:.1f} MB"
         )
         return text, kb_after_pack()
 
@@ -588,10 +593,10 @@ async def _run_pack(user_id: int, split_size) -> tuple:
         f"Partes: {len(files)}  |  Total: {total_mb:.1f} MB\n",
     ]
     if list_url:
-        lines.append(f"Lista de partes: {list_url}\n")
-    lines.append("**Enlaces de descarga:**")
+        lines.append(f"\n{_link('Lista de partes (.txt)', list_url)}")
+    lines.append("\n**Enlaces de descarga:**")
     for f in files:
-        lines.append(f"\n{f['filename']}\n{f['url']}")
+        lines.append(f"\n{_link(f['filename'], f['url'])} — {f['size_mb']:.1f} MB")
 
     text = "\n".join(lines)
 
@@ -601,7 +606,7 @@ async def _run_pack(user_id: int, split_size) -> tuple:
             f"✅ **{len(files)} partes generadas{orig}**\n"
             f"Total: {total_mb:.1f} MB\n\n"
             "Los enlaces estan en tu carpeta packed. Usa el boton de abajo para verlos."
-            + (f"\n\nLista de partes: {list_url}" if list_url else "")
+            + (f"\n\n{_link('Lista de partes (.txt)', list_url)}" if list_url else "")
         )
         return short, kb_after_pack()
 
@@ -892,18 +897,13 @@ async def process_single_file(client, message, user_id, position, total):
         remaining = len(user_queues[user_id]) - 1
         queue_note = f"\n\nSiguiente en cola: {remaining} archivo(s) restante(s)..." if remaining > 0 else ""
 
-        # Nombre seguro para el mensaje (sin markdown que rompa entidades)
-        safe_name = orig_name.replace("*", "").replace("_", " ").replace("`", "")
-
         await prog_msg.edit_text(
             f"✅ **Archivo guardado — #{final_num}**\n\n"
-            f"Nombre: {safe_name}\n"
-            f"Tipo: {file_type}  |  Tamanio: {size_mb:.2f} MB\n\n"
-            f"Enlace: {url}\n"
-            f"Carpeta: downloads"
+            f"{_link(orig_name, url)}\n"
+            f"{file_type}  ·  {size_mb:.2f} MB  ·  downloads"
             f"{queue_note}",
             reply_markup=kb_after_upload(),
-            disable_web_page_preview=True,
+            disable_web_page_preview=False,
         )
 
     except Exception as e:
