@@ -24,7 +24,9 @@ class TelegramBot:
                 "file_to_link_bot",
                 api_id=API_ID,
                 api_hash=API_HASH,
-                bot_token=BOT_TOKEN
+                bot_token=BOT_TOKEN,
+                max_concurrent_transmissions=6,
+                ipv6=False              
             )
 
             await self.setup_handlers()
